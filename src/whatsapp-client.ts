@@ -235,12 +235,24 @@ export class WhatsAppClient extends EventEmitter {
             const msg = lastMsgFromStore || (chat.messages ? (chat.messages.all ? chat.messages.all()[0] : chat.messages[0]) : null);
             const lastMsg = msg || chat.lastMessageRecv || chat.lastMessage || {};
             
-            let timestamp: any = (lastMsg && lastMsg.messageTimestamp) ? lastMsg.messageTimestamp : (chat.conversationTimestamp || (Date.now() / 1000));
+            // Timestamp logic fix: Prevent old chats from rising to top
+            // 1. Last message specific timestamp (message in store) -> BEST
+            // 2. Last message from chat object -> GOOD
+            // 3. Conversation timestamp -> OKAY
+            // 4. ZERO -> If nothing found, it's very old/empty, send to bottom. NEVER Date.now()
+
+            let timestamp: any = 0;
+            if (lastMsg && lastMsg.messageTimestamp) {
+                timestamp = lastMsg.messageTimestamp;
+            } else if (chat.conversationTimestamp) {
+                timestamp = chat.conversationTimestamp;
+            }
 
             if (typeof timestamp === 'object' && timestamp !== null) {
                 timestamp = timestamp.low !== undefined ? timestamp.low : (timestamp.toNumber ? timestamp.toNumber() : timestamp);
             }
             
+            // Explicit check for valid number
             const finalTimestamp = Number(timestamp);
 
             if (lastMsg && lastMsg.message) {
@@ -258,7 +270,8 @@ export class WhatsAppClient extends EventEmitter {
             return {
                 jid: chat.id,
                 name: name,
-                timestamp: !isNaN(finalTimestamp) ? finalTimestamp : (Date.now() / 1000),
+                // Only use valid timestamps greater than 0
+                timestamp: !isNaN(finalTimestamp) && finalTimestamp > 0 ? finalTimestamp : 0,
                 unreadCount: chat.unreadCount || 0,
                 isGroup: chat.id.endsWith('@g.us'),
                 lastMessage: content
