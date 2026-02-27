@@ -14,8 +14,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 /**
- * @intervention IMPL-20260227-06
- * @see context/checkpoints/CHK_20260227_SALES_AGENT.md
+ * @intervention IMPL-20260227-CRASH
+ * @see context/interconsultas/DICTAMEN_FIX-20260227-01.md
  */
 
 export interface ChatInfo {
@@ -32,7 +32,7 @@ export class WhatsAppClient extends EventEmitter {
     private state: any;
     private saveCreds: any;
     private authPath: string;
-    private chats: Map<string, ChatInfo> = new Map();
+    private store: { chats: Map<string, any>; contacts: Map<string, any>; writeToFile: (path: string) => void; readFromFile: (path: string) => void; bind: (ev: any) => void; } | undefined;
     private isConnecting: boolean = false;
     private isReconnecting: boolean = false;
     private reconnectTimeout: NodeJS.Timeout | undefined;
@@ -43,6 +43,93 @@ export class WhatsAppClient extends EventEmitter {
         if (!fs.existsSync(this.authPath)) {
             fs.mkdirSync(this.authPath, { recursive: true });
         }
+
+        // --- FIX: Store MANUAL en memoria para persistencia de chats ---
+        // Implementación simple compatible con makeInMemoryStore
+        this.store = {
+            chats: new Map(),
+            contacts: new Map(),
+            bind: (ev: any) => {
+                ev.on('chats.set', ({ chats }: any) => {
+                   for (const chat of chats) this.store?.chats.set(chat.id, chat);
+                   this.emit('chats.update', this.getChats());
+                });
+                ev.on('chats.upsert', (newChats: any[]) => {
+                    for (const chat of newChats) {
+                        const existing = this.store?.chats.get(chat.id) || {};
+                        this.store?.chats.set(chat.id, { ...existing, ...chat });
+                    }
+                    this.emit('chats.update', this.getChats());
+                });
+                ev.on('chats.update', (updates: any[]) => {
+                    for (const update of updates) {
+                        const existing = this.store?.chats.get(update.id) || {};
+                        this.store?.chats.set(update.id, { ...existing, ...update });
+                    }
+                    this.emit('chats.update', this.getChats());
+                });
+                ev.on('contacts.set', ({ contacts }: any) => {
+                    for (const contact of contacts) this.store?.contacts.set(contact.id, contact);
+                });
+                ev.on('contacts.upsert', (contacts: any[]) => {
+                    for (const contact of contacts) {
+                        this.store?.contacts.set(contact.id, { ...(this.store?.contacts.get(contact.id) || {}), ...contact });
+                    }
+                });
+                ev.on('messages.upsert', ({ messages, type }: any) => {
+                    if (type === 'notify' || type === 'append') {
+                        for (const msg of messages) {
+                            if (!msg.key.remoteJid) continue;
+                            const jid = msg.key.remoteJid;
+                            const chat = this.store?.chats.get(jid) || { id: jid, unreadCount: 0 };
+                            
+                            // Actualizar timestamp y último mensaje
+                            chat.conversationTimestamp = (typeof msg.messageTimestamp === 'number') 
+                                ? msg.messageTimestamp 
+                                : msg.messageTimestamp?.low;
+                            
+                            // Guardar el mensaje completo como lastMessageRecv para compatibilidad
+                             chat.lastMessageRecv = msg;
+                            
+                            if (!msg.key.fromMe && type === 'notify') {
+                                chat.unreadCount = (chat.unreadCount || 0) + 1;
+                            }
+                            
+                            this.store?.chats.set(jid, chat);
+                        }
+                        this.emit('chats.update', this.getChats());
+                    }
+                });
+            },
+            writeToFile: (pathStr: string) => {
+                const data = {
+                    chats: Object.fromEntries(this.store!.chats),
+                    contacts: Object.fromEntries(this.store!.contacts)
+                };
+                fs.writeFileSync(pathStr, JSON.stringify(data));
+            },
+            readFromFile: (pathStr: string) => {
+                if (fs.existsSync(pathStr)) {
+                    const data = JSON.parse(fs.readFileSync(pathStr, 'utf-8'));
+                    this.store!.chats = new Map(Object.entries(data.chats || {}));
+                    this.store!.contacts = new Map(Object.entries(data.contacts || {}));
+                }
+            }
+        };
+
+        try {
+            const storePath = path.join(this.authPath, 'baileys_store.json');
+            this.store.readFromFile(storePath);
+        } catch (error) {
+            console.log('No se pudo leer store previo, iniciando nuevo.');
+        }
+
+        // Guardar store periódicamente
+        setInterval(() => {
+            try {
+                this.store?.writeToFile(path.join(this.authPath, 'baileys_store.json'));
+            } catch (error) {}
+        }, 10_000);
     }
 
     async connect() {
@@ -52,10 +139,10 @@ export class WhatsAppClient extends EventEmitter {
         }
         this.isConnecting = true;
 
-        // --- FIX: Cleanup robusto antes de reconectar ---
+        // --- Cleanup robusto antes de reconectar ---
         if (this.sock) {
             try {
-                this.sock.ws?.close(); // Cerrar WS si existe
+                this.sock.ws?.close();
                 this.sock.ev.removeAllListeners('connection.update');
                 this.sock.ev.removeAllListeners('creds.update');
                 this.sock.ev.removeAllListeners('messages.upsert');
@@ -66,7 +153,6 @@ export class WhatsAppClient extends EventEmitter {
             }
             this.sock = undefined;
         }
-        // -----------------------------------------------
 
         try {
             const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
@@ -75,13 +161,6 @@ export class WhatsAppClient extends EventEmitter {
 
             const { version, isLatest } = await fetchLatestBaileysVersion();
             console.log(`Usando Baileys v${version.join('.')}, isLatest: ${isLatest}`);
-
-            // Limpiar socket anterior si existe (evitar memory leaks / listeners zombies)
-            if (this.sock) {
-                this.sock.ev.removeAllListeners('connection.update');
-                this.sock.ev.removeAllListeners('creds.update');
-                this.sock.ev.removeAllListeners('messages.upsert');
-            }
 
             const logger = pino({ level: 'silent' });
 
@@ -94,7 +173,13 @@ export class WhatsAppClient extends EventEmitter {
                     keys: makeCacheableSignalKeyStore(state.keys, logger),
                 },
                 generateHighQualityLinkPreview: true,
+                // FIX: Configuración de browser para evitar desconexiones
+                browser: ['VS Code WhatsApp', 'Chrome', '1.0.0'], 
+                // FIX: Sincronizar historial completo
+                syncFullHistory: true, 
             });
+
+            this.store?.bind(this.sock.ev);
 
             this.sock.ev.on('connection.update', (update: any) => {
                 const { connection, lastDisconnect, qr } = update;
@@ -106,7 +191,6 @@ export class WhatsAppClient extends EventEmitter {
                 }
 
                 if (connection === 'close') {
-                    // Resetear flag para permitir futura reconexión
                     this.isConnecting = false;
                     
                     const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -114,10 +198,9 @@ export class WhatsAppClient extends EventEmitter {
                     
                     if (shouldReconnect) {
                          this.isReconnecting = true;
-                         // Backoff simple de 2s para evitar bucles rápidos
                          if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
                          this.reconnectTimeout = setTimeout(() => {
-                             this.isReconnecting = false; // Reset antes de llamar
+                             this.isReconnecting = false;
                              this.connect();
                          }, 2000);
                     }
@@ -131,8 +214,19 @@ export class WhatsAppClient extends EventEmitter {
 
             this.sock.ev.on('creds.update', saveCreds);
 
-            // Manejo de mensajes (re-registrar listeners en el nuevo socket)
-            this._registerMessageHandlers();
+            // Nota: Ya no necesitamos escuchar eventos del store aquí porque el store manual emite 'chats.update' en su bind.
+            
+            // Reenvío de mensajes nuevos para notificaciones
+            this.sock.ev.on('messages.upsert', async (m: any) => {
+                if (m.type === 'notify') {
+                    const msg = m.messages[0];
+                    if (!msg.key.fromMe) {
+                        this.emit('message', msg);
+                    }
+                    // Forzar refresh de chats aunque el store debería haberlo hecho
+                    this.emit('chats.update', this.getChats());
+                }
+            });
 
         } catch (error) {
             console.error('Error fatal al conectar:', error);
@@ -140,100 +234,50 @@ export class WhatsAppClient extends EventEmitter {
         }
     }
 
-    private _registerMessageHandlers() {
-        // Manejo de chats
-        this.sock.ev.on('chats.upsert', (newChats: any[]) => {
-            console.log('Chats upsert:', newChats.length);
-            for (const chat of newChats) {
-                this._updateChat(chat.id, chat);
-            }
-            this.emit('chats.update', this.getChats());
-        });
-
-        this.sock.ev.on('chats.update', (updates: any[]) => {
-            for (const update of updates) {
-                this._updateChat(update.id, update);
-            }
-            this.emit('chats.update', this.getChats());
-        });
-
-        this.sock.ev.on('messages.upsert', async (m: any) => {
-            if (m.type === 'notify' || m.type === 'append') {
-                const msg = m.messages[0];
-                if (!msg.key.remoteJid) return;
-
-                const jid = msg.key.remoteJid;
-                
-                const timestamp = (typeof msg.messageTimestamp === 'number') 
-                    ? msg.messageTimestamp 
-                    : (msg.messageTimestamp?.low || Date.now() / 1000);
-                
-                const currentChat = this.chats.get(jid);
-                const newUnread = !msg.key.fromMe ? ((currentChat?.unreadCount || 0) + 1) : 0;
-
-                this._updateChat(jid, {
-                    conversationTimestamp: timestamp,
-                    unreadCount: newUnread
-                });
-
-                if (m.type === 'notify') {
-                    this.emit('message', msg);
-                    this.emit('chats.update', this.getChats()); 
-                }
-            }
-        });
-    }
-
-    private _updateChat(jid: string, updates: any) {
-        if (jid === 'status@broadcast') return;
-
-        const existing = this.chats.get(jid) || {
-            jid,
-            name: jid.split('@')[0], // Default name
-            timestamp: Date.now() / 1000,
-            unreadCount: 0,
-            isGroup: jid.endsWith('@g.us'),
-            lastMessage: '' 
-        };
-
-        // Si es grupo y no tenemos nombre real, intentar obtenerlo
-        if (existing.isGroup && existing.name === jid.split('@')[0]) {
-            // Nota: Esto es asíncrono, se actualizará después
-            this.sock?.groupMetadata(jid).then((meta: any) => {
-                existing.name = meta.subject;
-                this.chats.set(jid, existing);
-                this.emit('chats.update', this.getChats());
-            }).catch(() => {});
-        } else if (!existing.isGroup && updates.name) {
-             existing.name = updates.name; // A veces viene en el update
-        }
-
-        if (updates.conversationTimestamp) {
-            existing.timestamp = (typeof updates.conversationTimestamp === 'number') 
-                ? updates.conversationTimestamp 
-                : updates.conversationTimestamp.low;
-        }
-
-        // Simular last message si no tenemos acceso al contenido exacto desde chats.update
-        // messages.upsert se encargará de poner el texto real
-
-        this.chats.set(jid, { ...existing, ...updates });
-    }
-
     getChats(): ChatInfo[] {
-        return Array.from(this.chats.values())
-            .sort((a, b) => b.timestamp - a.timestamp)
-            .slice(0, 20);
+        if (!this.store) return [];
+
+        // Obtener todos los chats del store (Map -> Array)
+        const chats = Array.from(this.store.chats.values());
+        
+        return chats.map((c: any) => {
+            const contact = this.store!.contacts.get(c.id) || {};
+            
+            // Lógica de nombre: name del chat > name del contacto > notify del contacto > user id
+            let name = c.name || contact.name || contact.notify || c.id.split('@')[0];
+            
+            // Último mensaje
+            const lastMsg = c.lastMessageRecv || c.lastMessage; 
+            
+            let content = '';
+            if (lastMsg) {
+                 const mContent = lastMsg.message;
+                 content = mContent?.conversation || 
+                           mContent?.extendedTextMessage?.text || 
+                           mContent?.imageMessage?.caption ||
+                           (mContent?.imageMessage ? '📷 Foto' : '') ||
+                           (mContent?.videoMessage ? '🎥 Video' : '') ||
+                           (mContent?.audioMessage ? '🎵 Audio' : '') ||
+                           (mContent?.stickerMessage ? '👾 Sticker' : '') ||
+                           'Mensaje';
+            }
+
+            return {
+                jid: c.id,
+                name,
+                timestamp: c.conversationTimestamp || (Date.now() / 1000),
+                unreadCount: c.unreadCount || 0,
+                isGroup: c.id.endsWith('@g.us'),
+                lastMessage: content
+            } as ChatInfo;
+        })
+        .sort((a: ChatInfo, b: ChatInfo) => b.timestamp - a.timestamp)
+        .slice(0, 50);
     } 
 
     async sendMessage(jid: string, text: string) {
         if (!this.sock) throw new Error('Cliente no conectado');
         const sent = await this.sock.sendMessage(jid, { text });
-        // Actualizar chat localmente para reflejar "Yo" envió algo
-        this._updateChat(jid, {
-            conversationTimestamp: Date.now() / 1000,
-            lastMessage: `You: ${text}`
-        });
         return sent;
     }
 

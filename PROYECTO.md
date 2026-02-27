@@ -7,6 +7,13 @@
 **Duración estimada:** 2 horas  
 **Estado:** [✓] Completado
 
+### ⚠️ Hotfix Critical Crash
+**ID:** FIX-20260227-CRASH
+**Estado:** [✓] Resuelto
+- [✓] Downgrade de baileys a v6.7.21 (stable)
+- [✓] Implementación manual de Store (evita lista vacía)
+- [✓] Configuración de browser (evita desconexiones)
+
 ### 🎯 Entregable Demostrable
 > Icono de WhatsApp en la Status Bar (barra inferior) que muestra el contador de mensajes no leídos. Al hacer clic, abre/cierra el Sidebar. Las notificaciones invasivas (popups) están eliminadas.
 
