@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { WhatsAppClient } from './whatsapp-client.js';
 
 /**
- * @intervention IMPL-20260227-03
- * @see context/checkpoints/CHK_20260227_CHAT_UI.md
+ * @intervention IMPL-20260227-04
+ * @see context/checkpoints/CHK_20260227_COPILOT_HELP.md
  */
 export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
@@ -64,6 +64,9 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         vscode.window.showErrorMessage('Error al enviar mensaje: ' + err.message);
                     }
                     break;
+                case 'askCopilot':
+                    vscode.commands.executeCommand('whatsapp.suggestWithCopilot', data.text);
+                    break;
             }
         });
 
@@ -78,11 +81,17 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
     private _getHtmlForWebview(webview: vscode.Webview) {
         let content = '';
+        
+        // Cargar Toolkit de Webview
+        const toolkitUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@vscode', 'webview-ui-toolkit', 'dist', 'toolkit.min.js'));
 
         if (this.isConnected) {
             const messagesHtml = this.messages.map(m => `
                 <div class="message ${m.sender === 'Yo' ? 'sent' : 'received'}">
-                    <div class="sender">${m.sender}</div>
+                    <div class="message-header">
+                        <span class="sender">${m.sender}</span>
+                        ${m.sender !== 'Yo' ? `<span class="copilot-action" onclick="askCopilot('${m.text}')" title="Pedir ayuda a Copilot">🤖</span>` : ''}
+                    </div>
                     <div class="text">${m.text}</div>
                 </div>
             `).join('');
@@ -92,9 +101,10 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                     <div id="messages-list">
                         ${messagesHtml}
                     </div>
+                    <vscode-divider></vscode-divider>
                     <div id="input-container">
-                        <input type="text" id="message-input" placeholder="Escribe un mensaje..." />
-                        <button id="send-btn">Enviar</button>
+                        <vscode-text-field id="message-input" placeholder="Escribe un mensaje..." autofocus></vscode-text-field>
+                        <vscode-button id="send-btn" appearance="primary">Enviar</vscode-button>
                     </div>
                 </div>
             `;
@@ -115,6 +125,7 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <script type="module" src="${toolkitUri}"></script>
                 <style>
                     body {
                         font-family: var(--vscode-font-family);
@@ -125,6 +136,7 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         display: flex;
                         flex-direction: column;
                         overflow: hidden;
+                        font-size: var(--vscode-font-size);
                     }
 
                     .qr-container, .loader {
@@ -144,52 +156,75 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         padding: 10px;
                         display: flex;
                         flex-direction: column;
-                        gap: 8px;
+                        gap: 12px;
+                        scrollbar-width: thin;
+                        scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
                     }
                     .message {
                         padding: 8px 12px;
-                        border-radius: 6px;
-                        max-width: 85%;
-                        font-size: 0.9em;
-                        line-height: 1.4;
+                        border-radius: 4px;
+                        max-width: 90%;
+                        font-size: 0.95em;
+                        line-height: 1.5;
+                        position: relative;
+                        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
                     }
                     .message.received {
                         align-self: flex-start;
                         background: var(--vscode-sideBar-background);
                         border: 1px solid var(--vscode-widget-border);
+                        color: var(--vscode-sideBar-foreground);
                     }
                     .message.sent {
                         align-self: flex-end;
-                        background: var(--vscode-button-background);
-                        color: var(--vscode-button-foreground);
+                        background: var(--vscode-selection-background);
+                        color: var(--vscode-selection-foreground);
+                        opacity: 0.9;
                     }
-                    .sender { font-weight: bold; font-size: 0.8em; margin-bottom: 2px; }
+                    .message-header {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        margin-bottom: 4px;
+                        gap: 8px;
+                    }
+                    .sender { 
+                        font-weight: 600; 
+                        font-size: 0.75em; 
+                        color: var(--vscode-descriptionForeground);
+                        text-transform: uppercase;
+                        letter-spacing: 0.05em;
+                    }
+
+                    .copilot-action {
+                        cursor: pointer;
+                        font-size: 1.1em;
+                        opacity: 0.6;
+                        transition: opacity 0.2s, transform 0.2s;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        width: 20px;
+                        height: 20px;
+                    }
+                    .copilot-action:hover {
+                        opacity: 1;
+                        transform: scale(1.2);
+                    }
                     
                     #input-container {
-                        padding: 10px;
+                        padding: 12px;
                         display: flex;
-                        gap: 5px;
+                        gap: 8px;
                         background: var(--vscode-sideBar-background);
-                        border-top: 1px solid var(--vscode-widget-border);
+                        align-items: center;
                     }
-                    #message-input {
+                    vscode-text-field {
                         flex: 1;
-                        background: var(--vscode-input-background);
-                        color: var(--vscode-input-foreground);
-                        border: 1px solid var(--vscode-input-border);
-                        padding: 4px 8px;
-                        border-radius: 2px;
                     }
-                    #message-input:focus { border-color: var(--vscode-focusBorder); outline: none; }
-                    #send-btn {
-                        background: var(--vscode-button-background);
-                        color: var(--vscode-button-foreground);
-                        border: none;
-                        padding: 4px 12px;
-                        cursor: pointer;
-                        border-radius: 2px;
+                    vscode-button {
+                        white-space: nowrap;
                     }
-                    #send-btn:hover { background: var(--vscode-button-hoverBackground); }
                 </style>
             </head>
             <body>
@@ -199,6 +234,10 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                     const list = document.getElementById('messages-list');
                     const input = document.getElementById('message-input');
                     const btn = document.getElementById('send-btn');
+
+                    function askCopilot(text) {
+                        vscode.postMessage({ type: 'askCopilot', text: text });
+                    }
 
                     if (btn) {
                         btn.addEventListener('click', () => {
@@ -218,7 +257,31 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         if (message.type === 'addMessage') {
                             const div = document.createElement('div');
                             div.className = 'message ' + (message.sender === 'Yo' ? 'sent' : 'received');
-                            div.innerHTML = \`<div class="sender">\${message.sender}</div><div class="text">\${message.text}</div>\`;
+                            
+                            const header = document.createElement('div');
+                            header.className = 'message-header';
+                            
+                            const senderSpan = document.createElement('span');
+                            senderSpan.className = 'sender';
+                            senderSpan.textContent = message.sender;
+                            header.appendChild(senderSpan);
+                            
+                            if (message.sender !== 'Yo') {
+                                const copilotSpan = document.createElement('span');
+                                copilotSpan.className = 'copilot-action';
+                                copilotSpan.textContent = '🤖';
+                                copilotSpan.title = 'Pedir ayuda a Copilot';
+                                copilotSpan.onclick = () => askCopilot(message.text);
+                                header.appendChild(copilotSpan);
+                            }
+                            
+                            const textDiv = document.createElement('div');
+                            textDiv.className = 'text';
+                            textDiv.textContent = message.text;
+                            
+                            div.appendChild(header);
+                            div.appendChild(textDiv);
+
                             if (list) {
                                 list.appendChild(div);
                                 list.scrollTop = list.scrollHeight;

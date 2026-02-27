@@ -28,12 +28,12 @@
 - [ ] (3) Persistencia de sesión multidevice [ ]
 
 ### Fase 2: Interfaz Nativa (VS Code UI)
-- [ ] (8) Chat UI con `vscode-webview-ui-toolkit` [ ]
+- [✓] (8) Chat UI con `vscode-webview-ui-toolkit` [✓]
 - [ ] (5) Notificaciones de sistema [ ]
-- [ ] (5) Buffer de chat local para Copilot [ ]
+- [✓] (5) Buffer de chat local para Copilot [✓]
 
 ### Fase 3: Inteligencia y Archivos
-- [ ] (13) Botón "Responder con Copilot" [ ]
+- [✓] (13) Botón "Responder con Copilot" [✓]
 - [ ] (8) Subida/Descarga de archivos nativa [ ]
 
 ## ⚠️ Deuda Técnica

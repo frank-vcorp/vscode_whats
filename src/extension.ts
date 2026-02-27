@@ -5,8 +5,8 @@ import { WhatsAppViewProvider } from './WhatsAppViewProvider.js';
 import { WhatsAppClient } from './whatsapp-client.js';
 
 /**
- * @intervention IMPL-20260227-03
- * @see context/checkpoints/CHK_20260227_CHAT_UI.md
+ * @intervention IMPL-20260227-04
+ * @see context/checkpoints/CHK_20260227_COPILOT_HELP.md
  */
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Felicidades, tu extensión "vscode-whats" ahora está activa.');
@@ -21,6 +21,49 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!fs.existsSync(contextDir)) {
         fs.mkdirSync(contextDir, { recursive: true });
     }
+
+    // Iniciar comando para Copilot
+    context.subscriptions.push(
+        vscode.commands.registerCommand('whatsapp.suggestWithCopilot', async (text?: string) => {
+            let contextText = '';
+            
+            if (text) {
+                // Si viene de un mensaje específico
+                contextText = text;
+            } else {
+                // Si es global, leemos el historial
+                try {
+                    if (fs.existsSync(historyPath)) {
+                        const content = fs.readFileSync(historyPath, 'utf8');
+                        const lines = content.trim().split('\n').filter(l => l.trim() !== '');
+                        contextText = lines.slice(-10).join('\n');
+                    }
+                } catch (err) {
+                    console.error('Error leyendo historial:', err);
+                }
+            }
+
+            if (!contextText) {
+                vscode.window.showInformationMessage('No hay mensajes recientes para analizar.');
+                return;
+            }
+
+            const prompt = `Basándote en estos mensajes de WhatsApp reciente, ¿qué respuesta profesional me sugieres? \n\n${contextText}`;
+            
+            // Intentar copiar al portapapeles por seguridad (pueden no tener Chat activo)
+            await vscode.env.clipboard.writeText(prompt);
+            vscode.window.showInformationMessage('Prompt copiado al portapapeles. Abre Copilot Chat y pégalo.', 'Abrir Chat').then(selection => {
+                if (selection === 'Abrir Chat') {
+                    vscode.commands.executeCommand('workbench.action.chat.open');
+                }
+            });
+            
+            // También intentamos lanzarlo directamente si es posible
+            vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt }).catch(err => {
+                console.log('El comando directo no es soportado en esta versión de VS Code:', err);
+            });
+        })
+    );
 
     // Listener para mensajes entrantes para persistencia
     client.on('message', async (m: any) => {

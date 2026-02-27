@@ -13,6 +13,22 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "whatsapp.suggestWithCopilot",
+        "title": "Sugerir respuesta con Copilot",
+        "icon": "$(sparkle)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "whatsapp.suggestWithCopilot",
+          "when": "view == whatsapp-view",
+          "group": "navigation"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -56,8 +72,8 @@
     "typescript": "^5.3.3"
   },
   "metadata": {
-    "intervention": "IMPL-20260227-01",
-    "see": "context/checkpoints/CHK_20260227_SCX.md"
+    "intervention": "IMPL-20260227-04",
+    "see": "context/checkpoints/CHK_20260227_COPILOT_HELP.md"
   },
   "dependencies": {
     "@vscode/webview-ui-toolkit": "^1.4.0",
