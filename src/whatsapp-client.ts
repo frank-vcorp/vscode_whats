@@ -12,8 +12,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 /**
- * @intervention IMPL-20260227-02
- * @see context/checkpoints/CHK_20260227_WAV2.md
+ * @intervention IMPL-20260227-03
+ * @see context/checkpoints/CHK_20260227_CHAT_UI.md
  */
 
 export class WhatsAppClient extends EventEmitter {
@@ -82,6 +82,11 @@ export class WhatsAppClient extends EventEmitter {
                 this.emit('message', m.messages[0]);
             }
         });
+    }
+
+    async sendMessage(jid: string, text: string) {
+        if (!this.sock) throw new Error('Cliente no conectado');
+        return await this.sock.sendMessage(jid, { text });
     }
 
     getSocket() {

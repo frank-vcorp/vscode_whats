@@ -60,6 +60,7 @@
     "see": "context/checkpoints/CHK_20260227_SCX.md"
   },
   "dependencies": {
+    "@vscode/webview-ui-toolkit": "^1.4.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "pino": "^10.3.1",
     "qrcode": "^1.5.4"

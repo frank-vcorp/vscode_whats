@@ -36,16 +36,35 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const WhatsAppViewProvider_js_1 = require("./WhatsAppViewProvider.js");
 const whatsapp_client_js_1 = require("./whatsapp-client.js");
 /**
- * @intervention IMPL-20260227-02
- * @see context/checkpoints/CHK_20260227_WAV2.md
+ * @intervention IMPL-20260227-03
+ * @see context/checkpoints/CHK_20260227_CHAT_UI.md
  */
 async function activate(context) {
     console.log('Felicidades, tu extensión "vscode-whats" ahora está activa.');
     const client = new whatsapp_client_js_1.WhatsAppClient(context.globalStorageUri.fsPath);
     const provider = new WhatsAppViewProvider_js_1.WhatsAppViewProvider(context.extensionUri, client);
+    const historyPath = path.join(context.extensionPath, 'context', 'whats_history.md');
+    // Asegurar que el directorio context existe
+    const contextDir = path.dirname(historyPath);
+    if (!fs.existsSync(contextDir)) {
+        fs.mkdirSync(contextDir, { recursive: true });
+    }
+    // Listener para mensajes entrantes para persistencia
+    client.on('message', async (m) => {
+        const messageText = m.message?.conversation || m.message?.extendedTextMessage?.text;
+        const senderName = m.pushName || m.key.remoteJid;
+        if (messageText) {
+            const logEntry = `**[${senderName}]:** ${messageText}\n\n`;
+            fs.appendFileSync(historyPath, logEntry);
+            // También notificar al provider para actualizar la UI en tiempo real
+            provider.addMessage(senderName, messageText);
+        }
+    });
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(WhatsAppViewProvider_js_1.WhatsAppViewProvider.viewType, provider));
     // Iniciar conexión en segundo plano
     client.connect().catch(console.error);

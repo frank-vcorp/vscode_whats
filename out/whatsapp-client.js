@@ -44,8 +44,8 @@ const qrcode_1 = __importDefault(require("qrcode"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 /**
- * @intervention IMPL-20260227-02
- * @see context/checkpoints/CHK_20260227_WAV2.md
+ * @intervention IMPL-20260227-03
+ * @see context/checkpoints/CHK_20260227_CHAT_UI.md
  */
 class WhatsAppClient extends events_1.default {
     sock;
@@ -105,6 +105,11 @@ class WhatsAppClient extends events_1.default {
                 this.emit('message', m.messages[0]);
             }
         });
+    }
+    async sendMessage(jid, text) {
+        if (!this.sock)
+            throw new Error('Cliente no conectado');
+        return await this.sock.sendMessage(jid, { text });
     }
     getSocket() {
         return this.sock;
