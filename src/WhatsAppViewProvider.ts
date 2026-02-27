@@ -476,11 +476,15 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         const isToday = date.getDate() === today.getDate() && 
                                       date.getMonth() === today.getMonth() && 
                                       date.getFullYear() === today.getFullYear();
+                        const isThisYear = date.getFullYear() === today.getFullYear();
                         
-                        document.write(isToday 
-                            ? date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-                            : date.toLocaleDateString([], {day: '2-digit', month: '2-digit'})
-                        );
+                        if (isToday) {
+                            document.write(date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}));
+                        } else if (isThisYear) {
+                            document.write(date.toLocaleDateString([], {day: '2-digit', month: '2-digit'}));
+                        } else {
+                            document.write(date.toLocaleDateString([], {day: '2-digit', month: '2-digit', year: '2-digit'}));
+                        }
                     })();
                 </script>
             `;

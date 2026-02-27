@@ -238,14 +238,34 @@ export class WhatsAppClient extends EventEmitter {
             // Timestamp logic fix: Prevent old chats from rising to top
             // 1. Last message specific timestamp (message in store) -> BEST
             // 2. Last message from chat object -> GOOD
-            // 3. Conversation timestamp -> OKAY
-            // 4. ZERO -> If nothing found, it's very old/empty, send to bottom. NEVER Date.now()
+            // 3. Conversation timestamp -> ONLY if reliable (not just metadata update)
 
             let timestamp: any = 0;
+            
+            // Prioritize explicit message timestamp over conversation metadata
             if (lastMsg && lastMsg.messageTimestamp) {
                 timestamp = lastMsg.messageTimestamp;
-            } else if (chat.conversationTimestamp) {
-                timestamp = chat.conversationTimestamp;
+            } else {
+                // FALLBACK: Only use conversationTimestamp if we found NO other message source
+                // or if conversationTimestamp is reasonably close to a message time.
+                // But since we don't have a message time (lastMsg is empty), we must rely on it
+                // OR check if chat.unreadCount > 0 which implies recent activity.
+
+                if (chat.unreadCount > 0 && chat.conversationTimestamp) {
+                    timestamp = chat.conversationTimestamp;
+                } else {
+                    // If no unread messages, try digging for ANY message timestamp to avoid recent metadata updates bumping old chats
+                     const lastRecv = chat.lastMessageRecv?.messageTimestamp;
+                     const lastSent = chat.lastMessage?.messageTimestamp;
+                     
+                     // Use the latest of the specific message timestamps if available
+                     if (lastRecv || lastSent) {
+                         timestamp = Math.max(Number(lastRecv || 0), Number(lastSent || 0));
+                     } else {
+                         // Last resort: conversationTimestamp (even if risky)
+                         timestamp = chat.conversationTimestamp;
+                     }
+                }
             }
 
             if (typeof timestamp === 'object' && timestamp !== null) {
