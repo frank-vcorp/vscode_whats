@@ -463,18 +463,35 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
     private _renderChatList(): string {
         const chatsHtml = this.chats.map(chat => {
-            const date = new Date(chat.timestamp * 1000);
-            const today = new Date();
-            const isToday = date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear();
-            const timeString = isToday 
-                ? date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-                : date.toLocaleDateString([], {day: '2-digit', month: '2-digit'});
+            // Enviamos el timestamp crudo al cliente para que lo procese con su zona horaria
+            const timestamp = chat.timestamp * 1000;
+            
+            // Script inline para formatear fecha en el cliente (navegador/webview)
+            const dateScript = `
+                <script>
+                    (function() {
+                        const ts = ${timestamp};
+                        const date = new Date(ts);
+                        const today = new Date();
+                        const isToday = date.getDate() === today.getDate() && 
+                                      date.getMonth() === today.getMonth() && 
+                                      date.getFullYear() === today.getFullYear();
+                        
+                        document.write(isToday 
+                            ? date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                            : date.toLocaleDateString([], {day: '2-digit', month: '2-digit'})
+                        );
+                    })();
+                </script>
+            `;
 
             return `
             <div class="chat-item" data-action="select-chat" data-jid="${this._escapeHtml(chat.jid)}">
                 <div class="chat-header">
                     <span>${this._escapeHtml(chat.name || chat.jid.replace('@s.whatsapp.net', ''))}</span>
-                    <span style="font-size: 0.8em; color: var(--vscode-descriptionForeground);">${timeString}</span>
+                    <span style="font-size: 0.8em; color: var(--vscode-descriptionForeground);" class="chat-time" data-ts="${timestamp}">
+                        ${dateScript}
+                    </span>
                 </div>
                 <div class="chat-preview">
                     ${this._escapeHtml(chat.lastMessage && chat.lastMessage.length > 50 ? chat.lastMessage.substring(0, 50) + '...' : chat.lastMessage || '...')}

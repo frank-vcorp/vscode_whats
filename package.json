@@ -2,7 +2,7 @@
   "name": "vscode-whats",
   "displayName": "WhatsApp Web for VS Code",
   "description": "Integra WhatsApp Web en tu sidebar de VS Code",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "publisher": "frank-saavedra",
   "repository": {
     "type": "git",
