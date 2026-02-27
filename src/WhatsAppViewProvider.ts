@@ -462,17 +462,26 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
     }
 
     private _renderChatList(): string {
-        const chatsHtml = this.chats.map(chat => `
+        const chatsHtml = this.chats.map(chat => {
+            const date = new Date(chat.timestamp * 1000);
+            const today = new Date();
+            const isToday = date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear();
+            const timeString = isToday 
+                ? date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                : date.toLocaleDateString([], {day: '2-digit', month: '2-digit'});
+
+            return `
             <div class="chat-item" data-action="select-chat" data-jid="${this._escapeHtml(chat.jid)}">
                 <div class="chat-header">
-                    <span>${this._escapeHtml(chat.name || chat.jid)}</span>
-                    <span>${new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                    <span>${this._escapeHtml(chat.name || chat.jid.replace('@s.whatsapp.net', ''))}</span>
+                    <span style="font-size: 0.8em; color: var(--vscode-descriptionForeground);">${timeString}</span>
                 </div>
                 <div class="chat-preview">
-                    ${this._escapeHtml(chat.lastMessage || '...')}
+                    ${this._escapeHtml(chat.lastMessage && chat.lastMessage.length > 50 ? chat.lastMessage.substring(0, 50) + '...' : chat.lastMessage || '...')}
                 </div>
             </div>
-        `).join('');
+            `;
+        }).join('');
 
         return `
             <div id="chat-list">

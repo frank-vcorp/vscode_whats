@@ -154,6 +154,23 @@ class WhatsAppClient extends events_1.default {
             });
             // Bindear el store a los eventos del socket
             this.store?.bind(this.sock.ev);
+            // Listener explícito para historial y actualizaciones
+            this.sock.ev.on('messaging-history.set', (arg) => {
+                const { chats, contacts, messages, isLatest } = arg;
+                console.log(`Historial recibido: ${chats?.length || 0} chats, ${contacts?.length || 0} contactos, ${messages?.length || 0} mensajes.`);
+                // Forzar actualización de UI después de recibir historial
+                setTimeout(() => {
+                    this.emit('chats.update', this.getChats());
+                }, 2000); // Dar tiempo al store para procesar
+            });
+            this.sock.ev.on('contacts.upsert', (contacts) => {
+                console.log(`Contactos actualizados: ${contacts.length}`);
+                this.emit('chats.update', this.getChats());
+            });
+            this.sock.ev.on('chats.upsert', (chats) => {
+                console.log(`Chats actualizados: ${chats.length}`);
+                this.emit('chats.update', this.getChats());
+            });
             this.sock.ev.on('connection.update', (update) => {
                 const { connection, lastDisconnect, qr } = update;
                 if (qr) {
@@ -203,52 +220,46 @@ class WhatsAppClient extends events_1.default {
     getChats() {
         if (!this.store)
             return [];
-        // Obtener chats ordenados usando lógica simple
-        // store.chats es un objeto o mapa. makeInMemoryStore usa un mapa interno pero expone métodos
-        // Asumiendo que store.chats tiene un método o es iterable
-        let chats = [];
-        if (this.store.chats) {
-            // Intenta usar .all() si existe (KeyedDB)
-            if (typeof this.store.chats.all === 'function') {
-                chats = this.store.chats.all();
+        const chats = this.store.chats.all ? this.store.chats.all() :
+            (this.store.chats instanceof Map ? Array.from(this.store.chats.values()) : Object.values(this.store.chats));
+        return chats.map((chat) => {
+            const contact = this.store.contacts[chat.id] || {};
+            const name = contact.name || contact.notify || chat.name || chat.id.split('@')[0];
+            // Extract message content safely
+            let content = '...';
+            // Baileys v6 store structure might differ slightly
+            const messagesInStore = this.store.messages ? (this.store.messages[chat.id]?.array || this.store.messages[chat.id] || []) : [];
+            const lastMsgFromStore = messagesInStore.length > 0 ? messagesInStore[messagesInStore.length - 1] : null;
+            const msg = lastMsgFromStore || (chat.messages ? (chat.messages.all ? chat.messages.all()[0] : chat.messages[0]) : null);
+            const lastMsg = msg || chat.lastMessageRecv || chat.lastMessage || {};
+            let timestamp = chat.conversationTimestamp;
+            if (lastMsg && lastMsg.messageTimestamp) {
+                timestamp = lastMsg.messageTimestamp;
+                if (typeof timestamp === 'object')
+                    timestamp = timestamp.low; // Long implementation
             }
-            else if (this.store.chats instanceof Map) {
-                chats = Array.from(this.store.chats.values());
-            }
-            else {
-                chats = Object.values(this.store.chats);
-            }
-        }
-        return chats.map((c) => {
-            const contact = this.store.contacts[c.id] || {};
-            // Lógica de nombre
-            let name = c.name || contact.name || contact.notify || c.id.split('@')[0];
-            // Último mensaje
-            const lastMsg = c.lastMessageRecv || c.lastMessage;
-            let content = '';
-            // Extraer texto del mensaje de forma segura
+            timestamp = timestamp || (Date.now() / 1000);
             if (lastMsg && lastMsg.message) {
-                const mContent = lastMsg.message;
-                content = mContent.conversation ||
-                    mContent.extendedTextMessage?.text ||
-                    mContent.imageMessage?.caption ||
-                    (mContent.imageMessage ? '📷 Foto' : '') ||
-                    (mContent.videoMessage ? '🎥 Video' : '') ||
-                    (mContent.audioMessage ? '🎵 Audio' : '') ||
-                    (mContent.stickerMessage ? '👾 Sticker' : '') ||
-                    'Mensaje';
+                const m = lastMsg.message;
+                content = m.conversation ||
+                    m.extendedTextMessage?.text ||
+                    m.imageMessage?.caption || (m.imageMessage ? '📷 Foto' : '') ||
+                    m.videoMessage?.caption || (m.videoMessage ? '🎥 Video' : '') ||
+                    m.audioMessage?.caption || (m.audioMessage ? '🎵 Audio' : '') ||
+                    m.stickerMessage?.caption || (m.stickerMessage ? '👾 Sticker' : '') ||
+                    m.documentMessage?.caption || (m.documentMessage ? '📄 Documento' : '') ||
+                    '...';
             }
             return {
-                jid: c.id,
-                name,
-                timestamp: c.conversationTimestamp || (Date.now() / 1000),
-                unreadCount: c.unreadCount || 0,
-                isGroup: c.id.endsWith('@g.us'),
+                jid: chat.id,
+                name: name,
+                timestamp: chat.conversationTimestamp || (Date.now() / 1000),
+                unreadCount: chat.unreadCount || 0,
+                isGroup: chat.id.endsWith('@g.us'),
                 lastMessage: content
             };
         })
-            .sort((a, b) => b.timestamp - a.timestamp)
-            .slice(0, 50);
+            .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     }
     async sendMessage(jid, text) {
         if (!this.sock)
