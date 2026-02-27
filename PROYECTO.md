@@ -1,4 +1,4 @@
-# PROYECTO: WhatsApp for VS Code (v0.5.2 - Status Bar & Polish)
+# PROYECTO: WhatsApp for VS Code (v0.5.3 - Hotfix Hang/Crash)
 **Estado:** [✓] Completado
 
 ## 📋 MICRO-SPRINT: Integración en Status Bar
@@ -7,11 +7,12 @@
 **Duración estimada:** 2 horas  
 **Estado:** [✓] Completado
 
-### ⚠️ Hotfix Critical Crash
-**ID:** FIX-20260227-CRASH
-**Estado:** [✓] Resuelto
-- [✓] Downgrade de baileys a v6.7.21 (stable)
+### ⚠️ Hotfix Critical Hang/Crash
+**ID:** FIX-20260227-HANG
+**Estado:** [✓] Resuelto (v0.5.3)
+- [✓] Downgrade de baileys a v6.6.0 (estable) para evitar hangs en QR
 - [✓] Implementación manual de Store (evita lista vacía)
+- [✓] Comando de emergencia "Reiniciar Sesión" (Factory Reset)
 - [✓] Configuración de browser (evita desconexiones)
 
 ### 🎯 Entregable Demostrable

@@ -37,6 +37,7 @@ export class WhatsAppClient extends EventEmitter {
     private store: any;
     private isConnecting: boolean = false;
     private isReconnecting: boolean = false;
+    private connectionTimer: NodeJS.Timeout | undefined;
     private reconnectTimeout: NodeJS.Timeout | undefined;
 
     constructor(storagePath: string) {
@@ -46,19 +47,20 @@ export class WhatsAppClient extends EventEmitter {
             fs.mkdirSync(this.authPath, { recursive: true });
         }
 
-        // --- FIX: Usar makeInMemoryStore oficial de Baileys ---
-        this.store = makeInMemoryStore({ 
-            logger: pino({ level: 'silent' }) as any
-        });
-
-        // Cargar store previo si existe
+        // --- FIX: Store robusto con manejo de errores ---
         try {
+            this.store = makeInMemoryStore({ 
+                logger: pino({ level: 'silent' }) as any
+            });
             const storePath = path.join(this.authPath, 'baileys_store_multi.json');
             if (fs.existsSync(storePath)) {
                 this.store.readFromFile(storePath);
             }
         } catch (error) {
-            console.log('No se pudo leer store previo, iniciando nuevo.');
+            console.error('Error inicializando store:', error);
+            // Si falla el store, intentar borrarlo para evitar bloqueos
+            try { fs.unlinkSync(path.join(this.authPath, 'baileys_store_multi.json')); } catch (e) {}
+            this.store = makeInMemoryStore({ logger: pino({ level: 'silent' }) as any });
         }
 
         // Guardar store periódicamente
@@ -66,15 +68,42 @@ export class WhatsAppClient extends EventEmitter {
             try {
                 this.store?.writeToFile(path.join(this.authPath, 'baileys_store_multi.json'));
             } catch (error) {}
-        }, 10_000);
+        }, 30_000);
+    }
+
+    async resetSession() {
+        console.log('Reseteando sesión...');
+        if (this.sock) {
+            this.sock.ws?.close();
+            this.sock.removeAllListeners();
+            this.sock = undefined;
+        }
+        
+        try {
+            fs.rmSync(this.authPath, { recursive: true, force: true });
+            fs.mkdirSync(this.authPath, { recursive: true });
+            console.log('Carpeta de sesión eliminada.');
+            this.emit('disconnected', 'Sesión reiniciada manualmente.');
+        } catch (error) {
+            console.error('Error borrando sesión:', error);
+        }
     }
 
     async connect() {
-        if (this.isConnecting || this.isReconnecting) {
-            console.log('Conexión/Reconexión en curso, ignorando llamada duplicada.');
-            return;
-        }
+        if (this.isConnecting || this.isReconnecting) return;
         this.isConnecting = true;
+        
+        // Timeout de seguridad: Si en 20s no conecta, forzar error
+        if (this.connectionTimer) clearTimeout(this.connectionTimer);
+        this.connectionTimer = setTimeout(() => {
+            if (this.isConnecting) {
+                console.error('Timeout de conexión - reiniciando proceso...');
+                this.isConnecting = false;
+                this.emit('error', 'Tiempo de espera agotado. Verifica tu conexión.');
+                // Opcional: Auto-reconnect
+                // this.connect();
+            }
+        }, 20000);
 
         // --- Cleanup robusto antes de reconectar ---
         if (this.sock) {

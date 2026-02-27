@@ -87,6 +87,10 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('whatsapp.focus', () => {
         // "whatsapp-view" es el ID definido en package.json
         vscode.commands.executeCommand('whatsapp-view.focus');
+    }), vscode.commands.registerCommand('whatsapp.reset', async () => {
+        await client.resetSession();
+        vscode.window.showInformationMessage('Sesión reiniciada. Recarga la ventana.');
+        vscode.commands.executeCommand('workbench.action.reloadWindow');
     }));
     // -----------------------------------------------------
     // --- FIX: SEC-002 - Usar globalStorageUri para historial ---

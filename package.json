@@ -2,8 +2,12 @@
   "name": "vscode-whats",
   "displayName": "WhatsApp Web for VS Code",
   "description": "Integra WhatsApp Web en tu sidebar de VS Code",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "publisher": "frank-saavedra",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frank-saavedra/vscode-whats.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -17,6 +21,11 @@
       {
         "command": "whatsapp.focus",
         "title": "Mostrar WhatsApp",
+        "category": "WhatsApp"
+      },
+      {
+        "command": "whatsapp.reset",
+        "title": "Reiniciar Sesión (Factory Reset)",
         "category": "WhatsApp"
       },
       {
