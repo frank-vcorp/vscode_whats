@@ -5,8 +5,8 @@ import { WhatsAppViewProvider } from './WhatsAppViewProvider.js';
 import { WhatsAppClient } from './whatsapp-client.js';
 
 /**
- * @intervention IMPL-20260227-04
- * @see context/checkpoints/CHK_20260227_COPILOT_HELP.md
+ * @intervention IMPL-20260227-05
+ * @see context/checkpoints/CHK_20260227_NOTIFY_MEDIA.md
  */
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Felicidades, tu extensión "vscode-whats" ahora está activa.');
@@ -76,6 +76,16 @@ export async function activate(context: vscode.ExtensionContext) {
             
             // También notificar al provider para actualizar la UI en tiempo real
             provider.addMessage(senderName, messageText);
+
+            // Notificación si no está visible
+            if (!provider.isVisible()) {
+                const preview = messageText.length > 50 ? messageText.substring(0, 47) + '...' : messageText;
+                vscode.window.showInformationMessage(`WhatsApp: ${senderName}: ${preview}`, 'Ver Chat').then(selection => {
+                    if (selection === 'Ver Chat') {
+                        vscode.commands.executeCommand('whatsapp-view.focus');
+                    }
+                });
+            }
         }
     });
 

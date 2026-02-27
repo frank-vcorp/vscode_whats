@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { WhatsAppClient } from './whatsapp-client.js';
 
 /**
- * @intervention IMPL-20260227-04
- * @see context/checkpoints/CHK_20260227_COPILOT_HELP.md
+ * @intervention IMPL-20260227-05
+ * @see context/checkpoints/CHK_20260227_NOTIFY_MEDIA.md
  */
 export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
@@ -30,6 +31,10 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    public isVisible(): boolean {
+        return this._view?.visible || false;
+    }
+
     public addMessage(sender: string, text: string) {
         this.messages.push({ sender, text });
         if (this.messages.length > 50) this.messages.shift();
@@ -54,12 +59,18 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
         };
 
         webviewView.webview.onDidReceiveMessage(async (data) => {
+            const jid = data.jid || '123456789@s.whatsapp.net'; // Demo JID
+            const historyPath = vscode.Uri.joinPath(this._extensionUri, 'context', 'whats_history.md').fsPath;
+
             switch (data.type) {
                 case 'sendMessage':
                     try {
-                        const jid = data.jid || '123456789@s.whatsapp.net'; // Demo JID
                         await this._client.sendMessage(jid, data.text);
                         this.addMessage('Yo', data.text);
+                        
+                        // Log a whats_history.md
+                        const logEntry = `**[Yo]:** ${data.text}\n\n`;
+                        fs.appendFileSync(historyPath, logEntry);
                     } catch (err: any) {
                         vscode.window.showErrorMessage('Error al enviar mensaje: ' + err.message);
                     }
@@ -67,10 +78,69 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                 case 'askCopilot':
                     vscode.commands.executeCommand('whatsapp.suggestWithCopilot', data.text);
                     break;
+                case 'attachFile':
+                    const options: vscode.OpenDialogOptions = {
+                        canSelectMany: false,
+                        openLabel: 'Enviar archivo',
+                        filters: {
+                            'Imágenes': ['png', 'jpg', 'jpeg'],
+                            'Documentos': ['pdf', 'doc', 'docx', 'txt'],
+                            'Todo': ['*']
+                        }
+                    };
+
+                    const fileUri = await vscode.window.showOpenDialog(options);
+                    if (fileUri && fileUri[0]) {
+                        try {
+                            const filePath = fileUri[0].fsPath;
+                            const fileName = filePath.split(/[\\/]/).pop() || 'archivo';
+                            const mimeType = this._getMimeType(filePath);
+
+                            const buffer = await vscode.workspace.fs.readFile(fileUri[0]);
+                            
+                            if (mimeType.startsWith('image/')) {
+                                await this._client.getSocket().sendMessage(jid, { 
+                                    image: buffer, 
+                                    caption: `Adjunto: ${fileName}`
+                                });
+                            } else {
+                                await this._client.getSocket().sendMessage(jid, { 
+                                    document: buffer,
+                                    mimetype: mimeType,
+                                    fileName: fileName
+                                });
+                            }
+
+                            const logMsg = `[Archivo: ${fileName}]`;
+                            this.addMessage('Yo', logMsg);
+                            
+                            // Log a whats_history.md
+                            const logEntry = `**[Yo]:** ${logMsg}\n\n`;
+                            fs.appendFileSync(historyPath, logEntry);
+
+                        } catch (err: any) {
+                            vscode.window.showErrorMessage('Error al enviar archivo: ' + err.message);
+                        }
+                    }
+                    break;
             }
         });
 
         this.updateHtml();
+    }
+
+    private _getMimeType(filePath: string): string {
+        const ext = filePath.split('.').pop()?.toLowerCase() || '';
+        const mimeMap: { [key: string]: string } = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'pdf': 'application/pdf',
+            'txt': 'text/plain',
+            'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        };
+        return mimeMap[ext] || 'application/octet-stream';
     }
 
     private updateHtml() {
@@ -103,6 +173,7 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                     </div>
                     <vscode-divider></vscode-divider>
                     <div id="input-container">
+                        <vscode-button id="clip-btn" appearance="icon" title="Adjuntar archivo">📎</vscode-button>
                         <vscode-text-field id="message-input" placeholder="Escribe un mensaje..." autofocus></vscode-text-field>
                         <vscode-button id="send-btn" appearance="primary">Enviar</vscode-button>
                     </div>
@@ -235,8 +306,16 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                     const input = document.getElementById('message-input');
                     const btn = document.getElementById('send-btn');
 
+                    const clipBtn = document.getElementById('clip-btn');
+
                     function askCopilot(text) {
                         vscode.postMessage({ type: 'askCopilot', text: text });
+                    }
+
+                    if (clipBtn) {
+                        clipBtn.addEventListener('click', () => {
+                            vscode.postMessage({ type: 'attachFile' });
+                        });
                     }
 
                     if (btn) {

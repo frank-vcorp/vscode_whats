@@ -72,8 +72,8 @@
     "typescript": "^5.3.3"
   },
   "metadata": {
-    "intervention": "IMPL-20260227-04",
-    "see": "context/checkpoints/CHK_20260227_COPILOT_HELP.md"
+    "intervention": "IMPL-20260227-05",
+    "see": "context/checkpoints/CHK_20260227_NOTIFY_MEDIA.md"
   },
   "dependencies": {
     "@vscode/webview-ui-toolkit": "^1.4.0",
