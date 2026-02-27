@@ -37,14 +37,18 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const WhatsAppViewProvider_js_1 = require("./WhatsAppViewProvider.js");
+const whatsapp_client_js_1 = require("./whatsapp-client.js");
 /**
- * @intervention IMPL-20260227-01
- * @see context/checkpoints/CHK_20260227_SCX.md
+ * @intervention IMPL-20260227-02
+ * @see context/checkpoints/CHK_20260227_WAV2.md
  */
-function activate(context) {
+async function activate(context) {
     console.log('Felicidades, tu extensión "vscode-whats" ahora está activa.');
-    const provider = new WhatsAppViewProvider_js_1.WhatsAppViewProvider(context.extensionUri);
+    const client = new whatsapp_client_js_1.WhatsAppClient(context.globalStorageUri.fsPath);
+    const provider = new WhatsAppViewProvider_js_1.WhatsAppViewProvider(context.extensionUri, client);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(WhatsAppViewProvider_js_1.WhatsAppViewProvider.viewType, provider));
+    // Iniciar conexión en segundo plano
+    client.connect().catch(console.error);
 }
 function deactivate() { }
 //# sourceMappingURL=extension.js.map
