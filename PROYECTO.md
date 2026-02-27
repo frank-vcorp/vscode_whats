@@ -1,10 +1,26 @@
-# PROYECTO: WhatsApp for VS Code (v0.3.0 - Multimedia & Notify)
+# PROYECTO: WhatsApp for VS Code (v0.4.0 - Sales Agent & Contacts)
 **Estado:** [/] En Progreso
 
-## 📋 MICRO-SPRINT: Multimedia y Notificaciones
+## 📋 MICRO-SPRINT: Contactos Reales y Cerebro Comercial
 **Fecha:** 2026-02-27  
-**ID:** IMPL-20260227-05  
+**ID:** ARCH-20260227-04  
 **Duración estimada:** 4 horas  
+
+### 🎯 Entregable Demostrable
+> Panel lateral con lista de chats recientes reales. Al seleccionar uno, se carga la conversación. Si un mensaje contiene palabras clave de venta (ej: "precio"), se resalta y ofrece un botón de "Generar Cotización".
+
+### ✅ Tareas Técnicas
+- [ ] Implementar `client.fetchChats` en Baileys para obtener lista real [ ]
+- [ ] UI de Lista de Contactos (Avatar + Nombre + Último Mensaje) [ ]
+- [ ] Lógica de selección de chat activo (Cargar historial del contacto) [ ]
+- [ ] **Sales Detector**: Regex para palabras clave ("precio", "costo", "cotización") -> Resaltado dorado en UI [ ]
+- [ ] Botón "Generar Cotización" -> Invoca comando de Copilot con prompt de ventas [ ]
+
+### 🧪 Cómo Demostrar
+1. Ver lista de chats reales en el Sidebar.
+2. Abrir un chat con un mensaje de prueba "cuánto cuesta una web".
+3. Ver que el mensaje brilla en dorado.
+4. Pulsar el botón de cotización y ver el borrador generado.
 
 ### 🎯 Entregable Demostrable
 > La extensión muestra notificaciones nativas en VS Code al llegar un mensaje y permite adjuntar archivos locales del ordenador para enviarlos por el chat.

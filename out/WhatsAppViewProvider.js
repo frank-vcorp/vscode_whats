@@ -35,9 +35,10 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppViewProvider = void 0;
 const vscode = __importStar(require("vscode"));
+const fs = __importStar(require("fs"));
 /**
- * @intervention IMPL-20260227-03
- * @see context/checkpoints/CHK_20260227_CHAT_UI.md
+ * @intervention IMPL-20260227-06
+ * @see context/checkpoints/CHK_20260227_SALES_AGENT.md
  */
 class WhatsAppViewProvider {
     _extensionUri;
@@ -46,7 +47,11 @@ class WhatsAppViewProvider {
     _view;
     lastQrCode;
     isConnected = false;
-    messages = [];
+    // Estado de la UI
+    currentView = 'list';
+    activeChatJid;
+    chats = []; // Cache de lista de chats
+    messagesCache = new Map();
     constructor(_extensionUri, _client) {
         this._extensionUri = _extensionUri;
         this._client = _client;
@@ -59,15 +64,59 @@ class WhatsAppViewProvider {
             this.lastQrCode = undefined;
             vscode.window.showInformationMessage('¡WhatsApp conectado con éxito!');
             this.updateHtml();
+            // Cargar chats iniciales
+            this.chats = this._client.getChats();
+            this.updateHtml();
+        });
+        this._client.on('chats.update', (updatedChats) => {
+            this.chats = updatedChats;
+            if (this.currentView === 'list') {
+                this.updateHtml();
+            }
+        });
+        this._client.on('message', (msg) => {
+            const jid = msg.key.remoteJid;
+            const text = msg.message?.conversation ||
+                msg.message?.extendedTextMessage?.text ||
+                msg.message?.imageMessage?.caption ||
+                (msg.message?.imageMessage ? '[Imagen]' : undefined);
+            if (jid && text) {
+                const isMe = msg.key.fromMe;
+                const sender = isMe ? 'Yo' : (msg.pushName || jid.split('@')[0]); // Nombre simple
+                this.addMessageToCache(jid, sender, text);
+                // Si estamos viendo este chat, actualizar
+                if (this.currentView === 'chat' && this.activeChatJid === jid) {
+                    if (this._view) {
+                        this._view.webview.postMessage({
+                            type: 'addMessage',
+                            sender,
+                            text,
+                            isSales: this.isSalesOpportunity(text)
+                        });
+                    }
+                }
+            }
         });
     }
-    addMessage(sender, text) {
-        this.messages.push({ sender, text });
-        if (this.messages.length > 50)
-            this.messages.shift();
-        if (this._view) {
-            this._view.webview.postMessage({ type: 'addMessage', sender, text });
+    isSalesOpportunity(text) {
+        const salesRegex = /\b(cotiz|precio|costo|cuanto|valor|desarrollo|app|web)\b/i;
+        return salesRegex.test(text);
+    }
+    addMessageToCache(jid, sender, text) {
+        if (!this.messagesCache.has(jid)) {
+            this.messagesCache.set(jid, []);
         }
+        const chatMsgs = this.messagesCache.get(jid);
+        chatMsgs.push({
+            sender,
+            text,
+            isSales: this.isSalesOpportunity(text)
+        });
+        if (chatMsgs.length > 50)
+            chatMsgs.shift();
+    }
+    isVisible() {
+        return this._view?.visible || false;
     }
     resolveWebviewView(webviewView, context, _token) {
         this._view = webviewView;
@@ -78,20 +127,105 @@ class WhatsAppViewProvider {
             ]
         };
         webviewView.webview.onDidReceiveMessage(async (data) => {
+            const jid = this.activeChatJid || 'unknown'; // JID actual
+            const historyPath = vscode.Uri.joinPath(this._extensionUri, 'context', 'whats_history.md').fsPath;
             switch (data.type) {
+                case 'selectChat':
+                    this.activeChatJid = data.jid;
+                    this.currentView = 'chat';
+                    this.updateHtml();
+                    break;
+                case 'backToList':
+                    this.currentView = 'list';
+                    this.activeChatJid = undefined;
+                    this.updateHtml();
+                    break;
                 case 'sendMessage':
+                    if (!this.activeChatJid)
+                        return;
                     try {
-                        const jid = data.jid || '123456789@s.whatsapp.net'; // Demo JID
-                        await this._client.sendMessage(jid, data.text);
-                        this.addMessage('Yo', data.text);
+                        await this._client.sendMessage(this.activeChatJid, data.text);
+                        this.addMessageToCache(this.activeChatJid, 'Yo', data.text);
+                        // Renderizado local optimista ya manejado por postMessage si se quiere, 
+                        // pero aquí esperamos el evento del cliente o forzamos update
+                        this.updateHtml(); // Redibujar simple por ahora
+                        // Log a whats_history.md
+                        const logEntry = `**[Yo -> ${this.activeChatJid}]:** ${data.text}\n\n`;
+                        fs.appendFileSync(historyPath, logEntry);
                     }
                     catch (err) {
                         vscode.window.showErrorMessage('Error al enviar mensaje: ' + err.message);
                     }
                     break;
+                case 'askCopilot':
+                    // Si es venta, el prompt puede ser más específico
+                    const prompt = data.isSales
+                        ? `Genera una respuesta profesional de VENTAS para este mensaje de cliente: "${data.text}". El objetivo es cerrar una reunión o enviar una cotización.`
+                        : `Responde a este mensaje de WhatsApp: "${data.text}"`;
+                    vscode.window.showInformationMessage('Consultando a Copilot Sales Agent... 💰');
+                    vscode.commands.executeCommand('whatsapp.suggestWithCopilot', prompt);
+                    break;
+                case 'attachFile':
+                    if (!this.activeChatJid)
+                        return;
+                    const options = {
+                        canSelectMany: false,
+                        openLabel: 'Enviar archivo',
+                        filters: {
+                            'Imágenes': ['png', 'jpg', 'jpeg'],
+                            'Documentos': ['pdf', 'doc', 'docx', 'txt'],
+                            'Todo': ['*']
+                        }
+                    };
+                    const fileUri = await vscode.window.showOpenDialog(options);
+                    if (fileUri && fileUri[0]) {
+                        try {
+                            const filePath = fileUri[0].fsPath;
+                            const fileName = filePath.split(/[\\/]/).pop() || 'archivo';
+                            const mimeType = this._getMimeType(filePath);
+                            const buffer = await vscode.workspace.fs.readFile(fileUri[0]);
+                            const sock = this._client.getSocket();
+                            if (!sock)
+                                throw new Error('No conectado');
+                            if (mimeType.startsWith('image/')) {
+                                await sock.sendMessage(this.activeChatJid, {
+                                    image: buffer,
+                                    caption: `Adjunto: ${fileName}`
+                                });
+                            }
+                            else {
+                                await sock.sendMessage(this.activeChatJid, {
+                                    document: buffer,
+                                    mimetype: mimeType,
+                                    fileName: fileName
+                                });
+                            }
+                            const logMsg = `[Archivo: ${fileName}]`;
+                            this.addMessageToCache(this.activeChatJid, 'Yo', logMsg);
+                            this.updateHtml();
+                            fs.appendFileSync(historyPath, `**[Yo -> ${this.activeChatJid}]:** ${logMsg}\n\n`);
+                        }
+                        catch (err) {
+                            vscode.window.showErrorMessage('Error al enviar archivo: ' + err.message);
+                        }
+                    }
+                    break;
             }
         });
         this.updateHtml();
+    }
+    _getMimeType(filePath) {
+        const ext = filePath.split('.').pop()?.toLowerCase() || '';
+        const mimeMap = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'pdf': 'application/pdf',
+            'txt': 'text/plain',
+            'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        };
+        return mimeMap[ext] || 'application/octet-stream';
     }
     updateHtml() {
         if (this._view) {
@@ -99,43 +233,36 @@ class WhatsAppViewProvider {
         }
     }
     _getHtmlForWebview(webview) {
+        const toolkitUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@vscode', 'webview-ui-toolkit', 'dist', 'toolkit.min.js'));
         let content = '';
-        if (this.isConnected) {
-            const messagesHtml = this.messages.map(m => `
-                <div class="message ${m.sender === 'Yo' ? 'sent' : 'received'}">
-                    <div class="sender">${m.sender}</div>
-                    <div class="text">${m.text}</div>
-                </div>
-            `).join('');
-            content = `
-                <div id="chat-container">
-                    <div id="messages-list">
-                        ${messagesHtml}
-                    </div>
-                    <div id="input-container">
-                        <input type="text" id="message-input" placeholder="Escribe un mensaje..." />
-                        <button id="send-btn">Enviar</button>
-                    </div>
-                </div>
-            `;
-        }
-        else if (this.lastQrCode) {
-            content = `
-                <div class="qr-container">
-                    <h2>Escanéame 👋</h2>
-                    <img src="${this.lastQrCode}" alt="WhatsApp QR Code" />
-                    <p>Usa WhatsApp en tu teléfono para escanear este código.</p>
-                </div>
-            `;
+        if (!this.isConnected) {
+            if (this.lastQrCode) {
+                content = `
+                    <div class="qr-container">
+                        <h2>Escanéame 👋</h2>
+                        <img src="${this.lastQrCode}" alt="WhatsApp QR Code" />
+                        <p>Usa WhatsApp en tu teléfono para escanear este código.</p>
+                    </div>`;
+            }
+            else {
+                content = '<div class="loader"><h2>Cargando conexión...</h2><p>Iniciando socket...</p></div>';
+            }
         }
         else {
-            content = '<div class="loader"><h2>Cargando conexión...</h2><p>Iniciando socket...</p></div>';
+            // Lógica de Vistas
+            if (this.currentView === 'list') {
+                content = this._renderChatList();
+            }
+            else {
+                content = this._renderConversation();
+            }
         }
         return `<!DOCTYPE html>
             <html lang="es">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <script type="module" src="${toolkitUri}"></script>
                 <style>
                     body {
                         font-family: var(--vscode-font-family);
@@ -146,18 +273,51 @@ class WhatsAppViewProvider {
                         display: flex;
                         flex-direction: column;
                         overflow: hidden;
+                        font-size: var(--vscode-font-size);
                     }
 
-                    .qr-container, .loader {
-                        padding: 20px;
-                        text-align: center;
-                    }
+                    /* Common */
+                    .qr-container, .loader { padding: 20px; text-align: center; }
                     img { background: white; padding: 10px; border-radius: 8px; max-width: 80%; }
-
-                    #chat-container {
+                    
+                    /* Chat List */
+                    #chat-list {
+                        overflow-y: auto;
+                        height: 100%;
+                    }
+                    .chat-item {
+                        padding: 10px 15px;
+                        border-bottom: 1px solid var(--vscode-widget-border);
+                        cursor: pointer;
                         display: flex;
                         flex-direction: column;
-                        height: 100%;
+                        gap: 4px;
+                    }
+                    .chat-item:hover {
+                        background: var(--vscode-list-hoverBackground);
+                    }
+                    .chat-header {
+                        display: flex;
+                        justify-content: space-between;
+                        font-weight: bold;
+                    }
+                    .chat-preview {
+                        font-size: 0.9em;
+                        color: var(--vscode-descriptionForeground);
+                        white-space: nowrap;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                    }
+
+                    /* Conversation */
+                    #chat-container { display: flex; flex-direction: column; height: 100%; }
+                    #chat-header-bar {
+                        padding: 10px;
+                        border-bottom: 1px solid var(--vscode-widget-border);
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                        background: var(--vscode-editor-background);
                     }
                     #messages-list {
                         flex: 1;
@@ -165,14 +325,15 @@ class WhatsAppViewProvider {
                         padding: 10px;
                         display: flex;
                         flex-direction: column;
-                        gap: 8px;
+                        gap: 12px;
                     }
                     .message {
                         padding: 8px 12px;
-                        border-radius: 6px;
-                        max-width: 85%;
-                        font-size: 0.9em;
-                        line-height: 1.4;
+                        border-radius: 4px;
+                        max-width: 90%;
+                        font-size: 0.95em;
+                        position: relative;
+                        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
                     }
                     .message.received {
                         align-self: flex-start;
@@ -181,48 +342,70 @@ class WhatsAppViewProvider {
                     }
                     .message.sent {
                         align-self: flex-end;
-                        background: var(--vscode-button-background);
-                        color: var(--vscode-button-foreground);
+                        background: var(--vscode-selection-background);
+                        color: var(--vscode-selection-foreground);
                     }
-                    .sender { font-weight: bold; font-size: 0.8em; margin-bottom: 2px; }
+                    
+                    /* Sales Opportunity Styling */
+                    .message.sales-opportunity {
+                        border: 2px solid #FFD700 !important; /* Gold border */
+                        background: #332b00 !important; /* Dark gold bg */
+                        color: #FFF !important;
+                    }
+                    .sales-icon {
+                        margin-left: 5px;
+                        font-size: 1.2em;
+                    }
+                    .sales-actions {
+                        margin-top: 8px;
+                        display: flex;
+                        justify-content: flex-end;
+                    }
+
+                    .message-header {
+                        display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 0.75em; opacity: 0.8;
+                    }
+                    .copilot-action { cursor: pointer; font-size: 1.2em; }
                     
                     #input-container {
-                        padding: 10px;
-                        display: flex;
-                        gap: 5px;
-                        background: var(--vscode-sideBar-background);
-                        border-top: 1px solid var(--vscode-widget-border);
+                        padding: 12px; display: flex; gap: 8px; background: var(--vscode-sideBar-background); align-items: center;
                     }
-                    #message-input {
-                        flex: 1;
-                        background: var(--vscode-input-background);
-                        color: var(--vscode-input-foreground);
-                        border: 1px solid var(--vscode-input-border);
-                        padding: 4px 8px;
-                        border-radius: 2px;
-                    }
-                    #message-input:focus { border-color: var(--vscode-focusBorder); outline: none; }
-                    #send-btn {
-                        background: var(--vscode-button-background);
-                        color: var(--vscode-button-foreground);
-                        border: none;
-                        padding: 4px 12px;
-                        cursor: pointer;
-                        border-radius: 2px;
-                    }
-                    #send-btn:hover { background: var(--vscode-button-hoverBackground); }
+                    vscode-text-field { flex: 1; }
                 </style>
             </head>
             <body>
                 ${content}
                 <script>
                     const vscode = acquireVsCodeApi();
+                    
+                    // List handlers
+                    function selectChat(jid) {
+                        vscode.postMessage({ type: 'selectChat', jid: jid });
+                    }
+
+                    // Conversación handlers
                     const list = document.getElementById('messages-list');
                     const input = document.getElementById('message-input');
-                    const btn = document.getElementById('send-btn');
+                    const sendBtn = document.getElementById('send-btn');
+                    const backBtn = document.getElementById('back-btn');
+                    const clipBtn = document.getElementById('clip-btn');
 
-                    if (btn) {
-                        btn.addEventListener('click', () => {
+                    function askCopilot(text, isSales) {
+                        vscode.postMessage({ type: 'askCopilot', text: text, isSales: isSales });
+                    }
+
+                    if (backBtn) {
+                        backBtn.addEventListener('click', () => {
+                            vscode.postMessage({ type: 'backToList' });
+                        });
+                    }
+
+                    if (clipBtn) {
+                        clipBtn.addEventListener('click', () => vscode.postMessage({ type: 'attachFile' }));
+                    }
+
+                    if (sendBtn) {
+                        sendBtn.addEventListener('click', () => {
                             const text = input.value;
                             if (text) {
                                 vscode.postMessage({ type: 'sendMessage', text: text });
@@ -230,27 +413,74 @@ class WhatsAppViewProvider {
                             }
                         });
                         input.addEventListener('keypress', (e) => {
-                            if (e.key === 'Enter') btn.click();
+                            if (e.key === 'Enter') sendBtn.click();
                         });
                     }
 
-                    window.addEventListener('message', event => {
-                        const message = event.data;
-                        if (message.type === 'addMessage') {
-                            const div = document.createElement('div');
-                            div.className = 'message ' + (message.sender === 'Yo' ? 'sent' : 'received');
-                            div.innerHTML = \`<div class="sender">\${message.sender}</div><div class="text">\${message.text}</div>\`;
-                            if (list) {
-                                list.appendChild(div);
-                                list.scrollTop = list.scrollHeight;
-                            }
-                        }
-                    });
-                    
+                    // Auto scroll
                     if (list) list.scrollTop = list.scrollHeight;
                 </script>
             </body>
             </html>`;
+    }
+    _renderChatList() {
+        const chatsHtml = this.chats.map(chat => `
+            <div class="chat-item" onclick="selectChat('${chat.jid}')">
+                <div class="chat-header">
+                    <span>${chat.name || chat.jid}</span>
+                    <span>${new Date(chat.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+                <div class="chat-preview">
+                    ${chat.lastMessage || '...'}
+                </div>
+            </div>
+        `).join('');
+        return `
+            <div id="chat-list">
+                <h3 style="padding: 10px;">Chats Recientes (${this.chats.length})</h3>
+                ${chatsHtml || '<div style="padding:20px; text-align:center;">No hay chats recientes</div>'}
+            </div>
+        `;
+    }
+    _renderConversation() {
+        if (!this.activeChatJid)
+            return '';
+        const msgs = this.messagesCache.get(this.activeChatJid) || [];
+        const messagesHtml = msgs.map(m => `
+            <div class="message ${m.sender === 'Yo' ? 'sent' : 'received'} ${m.isSales ? 'sales-opportunity' : ''}">
+                <div class="message-header">
+                    <span class="sender">${m.sender}</span>
+                    ${m.sender !== 'Yo' ? `
+                        <span class="copilot-action" onclick="askCopilot('${m.text.replace(/'/g, "\\'")}', ${m.isSales})" title="Pedir ayuda a Copilot">🤖</span>
+                    ` : ''}
+                    ${m.isSales ? '<span class="sales-icon" title="Oportunidad de Venta">💰</span>' : ''}
+                </div>
+                <div class="text">${m.text}</div>
+                ${m.isSales ? `
+                    <div class="sales-actions">
+                        <vscode-button appearance="secondary" style="font-size: 0.8em; padding: 2px 5px;" onclick="askCopilot('${m.text.replace(/'/g, "\\'")}', true)">
+                            Generar Cotización
+                        </vscode-button>
+                    </div>
+                ` : ''}
+            </div>
+        `).join('');
+        return `
+            <div id="chat-container">
+                <div id="chat-header-bar">
+                    <vscode-button id="back-btn" appearance="icon">⬅️</vscode-button>
+                    <h3>${this.activeChatJid}</h3>
+                </div>
+                <div id="messages-list">
+                    ${messagesHtml}
+                </div>
+                <div id="input-container">
+                    <vscode-button id="clip-btn" appearance="icon" title="Adjuntar archivo">📎</vscode-button>
+                    <vscode-text-field id="message-input" placeholder="Escribe un mensaje..." autofocus></vscode-text-field>
+                    <vscode-button id="send-btn" appearance="primary">Enviar</vscode-button>
+                </div>
+            </div>
+        `;
     }
 }
 exports.WhatsAppViewProvider = WhatsAppViewProvider;

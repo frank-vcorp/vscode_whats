@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { WhatsAppClient } from './whatsapp-client.js';
+import { WhatsAppClient, ChatInfo } from './whatsapp-client.js';
 
 /**
- * @intervention IMPL-20260227-05
- * @see context/checkpoints/CHK_20260227_NOTIFY_MEDIA.md
+ * @intervention IMPL-20260227-06
+ * @see context/checkpoints/CHK_20260227_SALES_AGENT.md
  */
 export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
@@ -12,7 +12,12 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private lastQrCode?: string;
     private isConnected: boolean = false;
-    private messages: { sender: string, text: string }[] = [];
+    
+    // Estado de la UI
+    private currentView: 'list' | 'chat' = 'list';
+    private activeChatJid?: string;
+    private chats: ChatInfo[] = []; // Cache de lista de chats
+    private messagesCache: Map<string, { sender: string, text: string, isSales?: boolean }[]> = new Map();
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -28,20 +33,66 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
             this.lastQrCode = undefined;
             vscode.window.showInformationMessage('¡WhatsApp conectado con éxito!');
             this.updateHtml();
+            // Cargar chats iniciales
+            this.chats = this._client.getChats();
+            this.updateHtml();
         });
+
+        this._client.on('chats.update', (updatedChats: ChatInfo[]) => {
+            this.chats = updatedChats;
+            if (this.currentView === 'list') {
+                this.updateHtml();
+            }
+        });
+
+        this._client.on('message', (msg: any) => {
+            const jid = msg.key.remoteJid;
+            const text = msg.message?.conversation || 
+                         msg.message?.extendedTextMessage?.text || 
+                         msg.message?.imageMessage?.caption || 
+                         (msg.message?.imageMessage ? '[Imagen]' : undefined);
+
+            if (jid && text) {
+                const isMe = msg.key.fromMe;
+                const sender = isMe ? 'Yo' : (msg.pushName || jid.split('@')[0]); // Nombre simple
+                
+                this.addMessageToCache(jid, sender, text);
+                
+                // Si estamos viendo este chat, actualizar
+                if (this.currentView === 'chat' && this.activeChatJid === jid) {
+                    if (this._view) {
+                        this._view.webview.postMessage({ 
+                            type: 'addMessage', 
+                            sender, 
+                            text,
+                            isSales: this.isSalesOpportunity(text)
+                        });
+                    }
+                }
+            }
+        });
+    }
+
+    private isSalesOpportunity(text: string): boolean {
+        const salesRegex = /\b(cotiz|precio|costo|cuanto|valor|desarrollo|app|web)\b/i;
+        return salesRegex.test(text);
+    }
+
+    private addMessageToCache(jid: string, sender: string, text: string) {
+        if (!this.messagesCache.has(jid)) {
+            this.messagesCache.set(jid, []);
+        }
+        const chatMsgs = this.messagesCache.get(jid)!;
+        chatMsgs.push({ 
+            sender, 
+            text, 
+            isSales: this.isSalesOpportunity(text) 
+        });
+        if (chatMsgs.length > 50) chatMsgs.shift();
     }
 
     public isVisible(): boolean {
         return this._view?.visible || false;
-    }
-
-    public addMessage(sender: string, text: string) {
-        this.messages.push({ sender, text });
-        if (this.messages.length > 50) this.messages.shift();
-        
-        if (this._view) {
-            this._view.webview.postMessage({ type: 'addMessage', sender, text });
-        }
     }
 
     public resolveWebviewView(
@@ -59,26 +110,51 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
         };
 
         webviewView.webview.onDidReceiveMessage(async (data) => {
-            const jid = data.jid || '123456789@s.whatsapp.net'; // Demo JID
+            const jid = this.activeChatJid || 'unknown'; // JID actual
             const historyPath = vscode.Uri.joinPath(this._extensionUri, 'context', 'whats_history.md').fsPath;
 
             switch (data.type) {
+                case 'selectChat':
+                    this.activeChatJid = data.jid;
+                    this.currentView = 'chat';
+                    this.updateHtml();
+                    break;
+                
+                case 'backToList':
+                    this.currentView = 'list';
+                    this.activeChatJid = undefined;
+                    this.updateHtml();
+                    break;
+
                 case 'sendMessage':
+                    if (!this.activeChatJid) return;
                     try {
-                        await this._client.sendMessage(jid, data.text);
-                        this.addMessage('Yo', data.text);
+                        await this._client.sendMessage(this.activeChatJid, data.text);
+                        this.addMessageToCache(this.activeChatJid, 'Yo', data.text);
+                        // Renderizado local optimista ya manejado por postMessage si se quiere, 
+                        // pero aquí esperamos el evento del cliente o forzamos update
+                        this.updateHtml(); // Redibujar simple por ahora
                         
                         // Log a whats_history.md
-                        const logEntry = `**[Yo]:** ${data.text}\n\n`;
+                        const logEntry = `**[Yo -> ${this.activeChatJid}]:** ${data.text}\n\n`;
                         fs.appendFileSync(historyPath, logEntry);
                     } catch (err: any) {
                         vscode.window.showErrorMessage('Error al enviar mensaje: ' + err.message);
                     }
                     break;
+                
                 case 'askCopilot':
-                    vscode.commands.executeCommand('whatsapp.suggestWithCopilot', data.text);
+                    // Si es venta, el prompt puede ser más específico
+                    const prompt = data.isSales 
+                        ? `Genera una respuesta profesional de VENTAS para este mensaje de cliente: "${data.text}". El objetivo es cerrar una reunión o enviar una cotización.` 
+                        : `Responde a este mensaje de WhatsApp: "${data.text}"`;
+                    
+                    vscode.window.showInformationMessage('Consultando a Copilot Sales Agent... 💰');
+                    vscode.commands.executeCommand('whatsapp.suggestWithCopilot', prompt);
                     break;
+
                 case 'attachFile':
+                    if (!this.activeChatJid) return;
                     const options: vscode.OpenDialogOptions = {
                         canSelectMany: false,
                         openLabel: 'Enviar archivo',
@@ -95,16 +171,18 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                             const filePath = fileUri[0].fsPath;
                             const fileName = filePath.split(/[\\/]/).pop() || 'archivo';
                             const mimeType = this._getMimeType(filePath);
-
                             const buffer = await vscode.workspace.fs.readFile(fileUri[0]);
                             
+                            const sock = this._client.getSocket();
+                            if (!sock) throw new Error('No conectado');
+
                             if (mimeType.startsWith('image/')) {
-                                await this._client.getSocket().sendMessage(jid, { 
+                                await sock.sendMessage(this.activeChatJid, { 
                                     image: buffer, 
                                     caption: `Adjunto: ${fileName}`
                                 });
                             } else {
-                                await this._client.getSocket().sendMessage(jid, { 
+                                await sock.sendMessage(this.activeChatJid, { 
                                     document: buffer,
                                     mimetype: mimeType,
                                     fileName: fileName
@@ -112,11 +190,10 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                             }
 
                             const logMsg = `[Archivo: ${fileName}]`;
-                            this.addMessage('Yo', logMsg);
+                            this.addMessageToCache(this.activeChatJid, 'Yo', logMsg);
+                            this.updateHtml();
                             
-                            // Log a whats_history.md
-                            const logEntry = `**[Yo]:** ${logMsg}\n\n`;
-                            fs.appendFileSync(historyPath, logEntry);
+                            fs.appendFileSync(historyPath, `**[Yo -> ${this.activeChatJid}]:** ${logMsg}\n\n`);
 
                         } catch (err: any) {
                             vscode.window.showErrorMessage('Error al enviar archivo: ' + err.message);
@@ -150,45 +227,28 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
-        let content = '';
-        
-        // Cargar Toolkit de Webview
         const toolkitUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@vscode', 'webview-ui-toolkit', 'dist', 'toolkit.min.js'));
 
-        if (this.isConnected) {
-            const messagesHtml = this.messages.map(m => `
-                <div class="message ${m.sender === 'Yo' ? 'sent' : 'received'}">
-                    <div class="message-header">
-                        <span class="sender">${m.sender}</span>
-                        ${m.sender !== 'Yo' ? `<span class="copilot-action" onclick="askCopilot('${m.text}')" title="Pedir ayuda a Copilot">🤖</span>` : ''}
-                    </div>
-                    <div class="text">${m.text}</div>
-                </div>
-            `).join('');
+        let content = '';
 
-            content = `
-                <div id="chat-container">
-                    <div id="messages-list">
-                        ${messagesHtml}
-                    </div>
-                    <vscode-divider></vscode-divider>
-                    <div id="input-container">
-                        <vscode-button id="clip-btn" appearance="icon" title="Adjuntar archivo">📎</vscode-button>
-                        <vscode-text-field id="message-input" placeholder="Escribe un mensaje..." autofocus></vscode-text-field>
-                        <vscode-button id="send-btn" appearance="primary">Enviar</vscode-button>
-                    </div>
-                </div>
-            `;
-        } else if (this.lastQrCode) {
-            content = `
-                <div class="qr-container">
-                    <h2>Escanéame 👋</h2>
-                    <img src="${this.lastQrCode}" alt="WhatsApp QR Code" />
-                    <p>Usa WhatsApp en tu teléfono para escanear este código.</p>
-                </div>
-            `;
+        if (!this.isConnected) {
+            if (this.lastQrCode) {
+                 content = `
+                    <div class="qr-container">
+                        <h2>Escanéame 👋</h2>
+                        <img src="${this.lastQrCode}" alt="WhatsApp QR Code" />
+                        <p>Usa WhatsApp en tu teléfono para escanear este código.</p>
+                    </div>`;
+            } else {
+                content = '<div class="loader"><h2>Cargando conexión...</h2><p>Iniciando socket...</p></div>';
+            }
         } else {
-            content = '<div class="loader"><h2>Cargando conexión...</h2><p>Iniciando socket...</p></div>';
+            // Lógica de Vistas
+            if (this.currentView === 'list') {
+                content = this._renderChatList();
+            } else {
+                content = this._renderConversation();
+            }
         }
 
         return `<!DOCTYPE html>
@@ -210,16 +270,48 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         font-size: var(--vscode-font-size);
                     }
 
-                    .qr-container, .loader {
-                        padding: 20px;
-                        text-align: center;
-                    }
+                    /* Common */
+                    .qr-container, .loader { padding: 20px; text-align: center; }
                     img { background: white; padding: 10px; border-radius: 8px; max-width: 80%; }
-
-                    #chat-container {
+                    
+                    /* Chat List */
+                    #chat-list {
+                        overflow-y: auto;
+                        height: 100%;
+                    }
+                    .chat-item {
+                        padding: 10px 15px;
+                        border-bottom: 1px solid var(--vscode-widget-border);
+                        cursor: pointer;
                         display: flex;
                         flex-direction: column;
-                        height: 100%;
+                        gap: 4px;
+                    }
+                    .chat-item:hover {
+                        background: var(--vscode-list-hoverBackground);
+                    }
+                    .chat-header {
+                        display: flex;
+                        justify-content: space-between;
+                        font-weight: bold;
+                    }
+                    .chat-preview {
+                        font-size: 0.9em;
+                        color: var(--vscode-descriptionForeground);
+                        white-space: nowrap;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                    }
+
+                    /* Conversation */
+                    #chat-container { display: flex; flex-direction: column; height: 100%; }
+                    #chat-header-bar {
+                        padding: 10px;
+                        border-bottom: 1px solid var(--vscode-widget-border);
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                        background: var(--vscode-editor-background);
                     }
                     #messages-list {
                         flex: 1;
@@ -228,15 +320,12 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         display: flex;
                         flex-direction: column;
                         gap: 12px;
-                        scrollbar-width: thin;
-                        scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
                     }
                     .message {
                         padding: 8px 12px;
                         border-radius: 4px;
                         max-width: 90%;
                         font-size: 0.95em;
-                        line-height: 1.5;
                         position: relative;
                         box-shadow: 0 1px 2px rgba(0,0,0,0.1);
                     }
@@ -244,82 +333,73 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                         align-self: flex-start;
                         background: var(--vscode-sideBar-background);
                         border: 1px solid var(--vscode-widget-border);
-                        color: var(--vscode-sideBar-foreground);
                     }
                     .message.sent {
                         align-self: flex-end;
                         background: var(--vscode-selection-background);
                         color: var(--vscode-selection-foreground);
-                        opacity: 0.9;
-                    }
-                    .message-header {
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        margin-bottom: 4px;
-                        gap: 8px;
-                    }
-                    .sender { 
-                        font-weight: 600; 
-                        font-size: 0.75em; 
-                        color: var(--vscode-descriptionForeground);
-                        text-transform: uppercase;
-                        letter-spacing: 0.05em;
-                    }
-
-                    .copilot-action {
-                        cursor: pointer;
-                        font-size: 1.1em;
-                        opacity: 0.6;
-                        transition: opacity 0.2s, transform 0.2s;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        width: 20px;
-                        height: 20px;
-                    }
-                    .copilot-action:hover {
-                        opacity: 1;
-                        transform: scale(1.2);
                     }
                     
-                    #input-container {
-                        padding: 12px;
+                    /* Sales Opportunity Styling */
+                    .message.sales-opportunity {
+                        border: 2px solid #FFD700 !important; /* Gold border */
+                        background: #332b00 !important; /* Dark gold bg */
+                        color: #FFF !important;
+                    }
+                    .sales-icon {
+                        margin-left: 5px;
+                        font-size: 1.2em;
+                    }
+                    .sales-actions {
+                        margin-top: 8px;
                         display: flex;
-                        gap: 8px;
-                        background: var(--vscode-sideBar-background);
-                        align-items: center;
+                        justify-content: flex-end;
                     }
-                    vscode-text-field {
-                        flex: 1;
+
+                    .message-header {
+                        display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 0.75em; opacity: 0.8;
                     }
-                    vscode-button {
-                        white-space: nowrap;
+                    .copilot-action { cursor: pointer; font-size: 1.2em; }
+                    
+                    #input-container {
+                        padding: 12px; display: flex; gap: 8px; background: var(--vscode-sideBar-background); align-items: center;
                     }
+                    vscode-text-field { flex: 1; }
                 </style>
             </head>
             <body>
                 ${content}
                 <script>
                     const vscode = acquireVsCodeApi();
-                    const list = document.getElementById('messages-list');
-                    const input = document.getElementById('message-input');
-                    const btn = document.getElementById('send-btn');
-
-                    const clipBtn = document.getElementById('clip-btn');
-
-                    function askCopilot(text) {
-                        vscode.postMessage({ type: 'askCopilot', text: text });
+                    
+                    // List handlers
+                    function selectChat(jid) {
+                        vscode.postMessage({ type: 'selectChat', jid: jid });
                     }
 
-                    if (clipBtn) {
-                        clipBtn.addEventListener('click', () => {
-                            vscode.postMessage({ type: 'attachFile' });
+                    // Conversación handlers
+                    const list = document.getElementById('messages-list');
+                    const input = document.getElementById('message-input');
+                    const sendBtn = document.getElementById('send-btn');
+                    const backBtn = document.getElementById('back-btn');
+                    const clipBtn = document.getElementById('clip-btn');
+
+                    function askCopilot(text, isSales) {
+                        vscode.postMessage({ type: 'askCopilot', text: text, isSales: isSales });
+                    }
+
+                    if (backBtn) {
+                        backBtn.addEventListener('click', () => {
+                            vscode.postMessage({ type: 'backToList' });
                         });
                     }
 
-                    if (btn) {
-                        btn.addEventListener('click', () => {
+                    if (clipBtn) {
+                        clipBtn.addEventListener('click', () => vscode.postMessage({ type: 'attachFile' }));
+                    }
+
+                    if (sendBtn) {
+                        sendBtn.addEventListener('click', () => {
                             const text = input.value;
                             if (text) {
                                 vscode.postMessage({ type: 'sendMessage', text: text });
@@ -327,50 +407,78 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                             }
                         });
                         input.addEventListener('keypress', (e) => {
-                            if (e.key === 'Enter') btn.click();
+                            if (e.key === 'Enter') sendBtn.click();
                         });
                     }
 
-                    window.addEventListener('message', event => {
-                        const message = event.data;
-                        if (message.type === 'addMessage') {
-                            const div = document.createElement('div');
-                            div.className = 'message ' + (message.sender === 'Yo' ? 'sent' : 'received');
-                            
-                            const header = document.createElement('div');
-                            header.className = 'message-header';
-                            
-                            const senderSpan = document.createElement('span');
-                            senderSpan.className = 'sender';
-                            senderSpan.textContent = message.sender;
-                            header.appendChild(senderSpan);
-                            
-                            if (message.sender !== 'Yo') {
-                                const copilotSpan = document.createElement('span');
-                                copilotSpan.className = 'copilot-action';
-                                copilotSpan.textContent = '🤖';
-                                copilotSpan.title = 'Pedir ayuda a Copilot';
-                                copilotSpan.onclick = () => askCopilot(message.text);
-                                header.appendChild(copilotSpan);
-                            }
-                            
-                            const textDiv = document.createElement('div');
-                            textDiv.className = 'text';
-                            textDiv.textContent = message.text;
-                            
-                            div.appendChild(header);
-                            div.appendChild(textDiv);
-
-                            if (list) {
-                                list.appendChild(div);
-                                list.scrollTop = list.scrollHeight;
-                            }
-                        }
-                    });
-                    
+                    // Auto scroll
                     if (list) list.scrollTop = list.scrollHeight;
                 </script>
             </body>
             </html>`;
+    }
+
+    private _renderChatList(): string {
+        const chatsHtml = this.chats.map(chat => `
+            <div class="chat-item" onclick="selectChat('${chat.jid}')">
+                <div class="chat-header">
+                    <span>${chat.name || chat.jid}</span>
+                    <span>${new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                </div>
+                <div class="chat-preview">
+                    ${chat.lastMessage || '...'}
+                </div>
+            </div>
+        `).join('');
+
+        return `
+            <div id="chat-list">
+                <h3 style="padding: 10px;">Chats Recientes (${this.chats.length})</h3>
+                ${chatsHtml || '<div style="padding:20px; text-align:center;">No hay chats recientes</div>'}
+            </div>
+        `;
+    }
+
+    private _renderConversation(): string {
+        if (!this.activeChatJid) return '';
+        
+        const msgs = this.messagesCache.get(this.activeChatJid) || [];
+        
+        const messagesHtml = msgs.map(m => `
+            <div class="message ${m.sender === 'Yo' ? 'sent' : 'received'} ${m.isSales ? 'sales-opportunity' : ''}">
+                <div class="message-header">
+                    <span class="sender">${m.sender}</span>
+                    ${m.sender !== 'Yo' ? `
+                        <span class="copilot-action" onclick="askCopilot('${m.text.replace(/'/g, "\\'")}', ${m.isSales})" title="Pedir ayuda a Copilot">🤖</span>
+                    ` : ''}
+                    ${m.isSales ? '<span class="sales-icon" title="Oportunidad de Venta">💰</span>' : ''}
+                </div>
+                <div class="text">${m.text}</div>
+                ${m.isSales ? `
+                    <div class="sales-actions">
+                        <vscode-button appearance="secondary" style="font-size: 0.8em; padding: 2px 5px;" onclick="askCopilot('${m.text.replace(/'/g, "\\'")}', true)">
+                            Generar Cotización
+                        </vscode-button>
+                    </div>
+                ` : ''}
+            </div>
+        `).join('');
+
+        return `
+            <div id="chat-container">
+                <div id="chat-header-bar">
+                    <vscode-button id="back-btn" appearance="icon">⬅️</vscode-button>
+                    <h3>${this.activeChatJid}</h3>
+                </div>
+                <div id="messages-list">
+                    ${messagesHtml}
+                </div>
+                <div id="input-container">
+                    <vscode-button id="clip-btn" appearance="icon" title="Adjuntar archivo">📎</vscode-button>
+                    <vscode-text-field id="message-input" placeholder="Escribe un mensaje..." autofocus></vscode-text-field>
+                    <vscode-button id="send-btn" appearance="primary">Enviar</vscode-button>
+                </div>
+            </div>
+        `;
     }
 }

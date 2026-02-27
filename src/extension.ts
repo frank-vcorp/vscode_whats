@@ -59,7 +59,7 @@ export async function activate(context: vscode.ExtensionContext) {
             });
             
             // También intentamos lanzarlo directamente si es posible
-            vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt }).catch(err => {
+            vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt }).then(undefined, err => {
                 console.log('El comando directo no es soportado en esta versión de VS Code:', err);
             });
         })
@@ -72,17 +72,21 @@ export async function activate(context: vscode.ExtensionContext) {
 
         if (messageText) {
             const logEntry = `**[${senderName}]:** ${messageText}\n\n`;
-            fs.appendFileSync(historyPath, logEntry);
-            
-            // También notificar al provider para actualizar la UI en tiempo real
-            provider.addMessage(senderName, messageText);
+            try {
+                fs.appendFileSync(historyPath, logEntry);
+            } catch (error) {
+                console.error('Error escribiendo historial:', error);
+            }
+
+            // Nota: El provider ya escucha 'message' internamente para actualizar la UI.
+            // provider.addMessage(senderName, messageText); <-- Eliminado
 
             // Notificación si no está visible
             if (!provider.isVisible()) {
                 const preview = messageText.length > 50 ? messageText.substring(0, 47) + '...' : messageText;
                 vscode.window.showInformationMessage(`WhatsApp: ${senderName}: ${preview}`, 'Ver Chat').then(selection => {
                     if (selection === 'Ver Chat') {
-                        vscode.commands.executeCommand('whatsapp-view.focus');
+                        vscode.commands.executeCommand('whatsapp.focus'); 
                     }
                 });
             }
