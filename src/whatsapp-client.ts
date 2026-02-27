@@ -3,11 +3,11 @@ import makeWASocket, {
     useMultiFileAuthState, 
     fetchLatestBaileysVersion, 
     makeCacheableSignalKeyStore,
-    makeInMemoryStore,
     WAMessage,
     proto,
     ParticipantAction
 } from '@whiskeysockets/baileys';
+import { makeInMemoryStore } from './store-fix';
 import { Boom } from '@hapi/boom';
 import EventEmitter from 'events';
 import pino from 'pino';
@@ -27,13 +27,14 @@ export interface ChatInfo {
     timestamp: number;
     unreadCount: number;
     isGroup: boolean;
+    debugSource?: string; // Para debug visual
 }
 
 export class WhatsAppClient extends EventEmitter {
     private sock: any;
     private state: any;
     private saveCreds: any;
-    private authPath: string;
+    private authPath: string; // Path to store creds
     private store: any;
     private isConnecting: boolean = false;
     private isReconnecting: boolean = false;
@@ -240,6 +241,7 @@ export class WhatsAppClient extends EventEmitter {
             // -------------------------------------------------------------------------------------
 
             let timestamp: number = 0; // Por defecto: FONDO DE LA LISTA
+            let debugSource = 'NONE';
 
             // 1. FUENTE SUPREMA: El array de mensajes locales del store
             // Esto asegura que si tenemos mensajes, usemos el último de verdad
@@ -247,12 +249,29 @@ export class WhatsAppClient extends EventEmitter {
                 // Iterar desde el final hacia el principio para encontrar el último mensaje con timestamp válido
                 for (let i = messagesInStore.length - 1; i >= 0; i--) {
                     const m = messagesInStore[i];
+                    
+                    // --- FILTRO DE MENSAJES DE SISTEMA / PROTOCOLO ---
+                    // Ignorar mensajes puramente técnicos que no deben reordenar el chat
+                    // protocolMessage: Revoke, Ephemeral settings
+                    // senderKeyDistributionMessage: Distribución de claves de cifrado (ruido de fondo)
+                    if (m.message?.protocolMessage || 
+                        m.message?.senderKeyDistributionMessage ||
+                        // @ts-ignore - messageStubType a veces no está en los tipos pero viene en el objeto
+                        (m.messageStubType && m.messageStubType === 2) /* CIPHERTEXT */) {
+                        continue;
+                    }
+
+                    // Ignorar updates de estado vacíos o irrelevantes
+                    // messageStubType 2 = CIPHERTEXT es común en "Waiting for this message" pero podría ser válido si es el único.
+                    // Sin embargo, si tenemos historial, preferimos mensajes reales.
+
                     let ts = m.messageTimestamp;
                     if (ts) {
                          // Normalizar Long / number
                          ts = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
                          if (ts > 0) {
                              timestamp = ts;
+                             debugSource = 'MSG'; // Encontrado en mensaje real
                              break;
                          }
                     }
@@ -271,6 +290,7 @@ export class WhatsAppClient extends EventEmitter {
 
                 if (valRecv > 0 || valSent > 0) {
                     timestamp = Math.max(valRecv, valSent);
+                    debugSource = 'META'; // Encontrado en metadata del chat
                 }
             }
 
@@ -278,7 +298,12 @@ export class WhatsAppClient extends EventEmitter {
             // Esto evita que actualizaciones de metadatos (foto, descripción) revivan chats de 2020.
             if (timestamp === 0 && chat.unreadCount > 0 && chat.conversationTimestamp) {
                 const ts = chat.conversationTimestamp;
-                timestamp = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
+                // SOLO si es razonablemente reciente (ej. > 2020) para evitar basura unix 0
+                const tsNum = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
+                if (tsNum > 1600000000) { // > Sept 2020
+                    timestamp = tsNum;
+                    debugSource = 'FALLBACK'; // Usando conversationTimestamp por unreadCount
+                }
             }
 
             
@@ -304,10 +329,41 @@ export class WhatsAppClient extends EventEmitter {
                 timestamp: !isNaN(finalTimestamp) && finalTimestamp > 0 ? finalTimestamp : 0,
                 unreadCount: chat.unreadCount || 0,
                 isGroup: chat.id.endsWith('@g.us'),
-                lastMessage: content
+                lastMessage: content,
+                debugSource: debugSource // FIX-20260227-SORTING-DEBUG
             } as ChatInfo;
         })
         .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+    }
+
+    // --- FIX: COMANDO PARA LIMPIAR STORE ---
+    async clearStore() {
+        console.log('Limpiando store (manteniendo sesión)...');
+        try {
+            // 1. Limpiar memoria
+            if (this.store) {
+                 // No hay método oficial clear(), re-creamos
+                 // this.store.chats.clear() si existiera
+            }
+            // 2. Borrar archivo físico
+            const storePath = path.join(this.authPath, 'baileys_store_multi.json');
+            if (fs.existsSync(storePath)) {
+                fs.unlinkSync(storePath);
+            }
+            // 3. Re-inicializar store vacío
+            this.store = makeInMemoryStore({ logger: pino({ level: 'silent' }) as any });
+            if (this.sock) {
+                this.store.bind(this.sock.ev);
+            }
+            // 4. Forzar resync simple (pidiendo historial de nuevo es complejo), 
+            // mejor solo vaciar y dejar que entren nuevos o reiniciar extensión.
+            this.emit('chats.update', []);
+            console.log('Store limpiado.');
+            return true;
+        } catch (e) {
+            console.error('Error limpiando store:', e);
+            return false;
+        }
     } 
 
     async sendMessage(jid: string, text: string) {

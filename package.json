@@ -29,6 +29,11 @@
         "category": "WhatsApp"
       },
       {
+        "command": "whatsapp.clearStore",
+        "title": "Limpiar Cache de Mensajes",
+        "category": "WhatsApp"
+      },
+      {
         "command": "whatsapp.suggestWithCopilot",
         "title": "Sugerir respuesta con Copilot",
         "icon": "$(sparkle)"
@@ -93,7 +98,7 @@
   "dependencies": {
     "@vscode/codicons": "^0.0.44",
     "@vscode/webview-ui-toolkit": "^1.4.0",
-    "@whiskeysockets/baileys": "^6.6.0",
+    "@whiskeysockets/baileys": "^6.7.21",
     "pino": "^7.11.0",
     "qrcode": "^1.5.4"
   }

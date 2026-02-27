@@ -91,6 +91,19 @@ async function activate(context) {
         await client.resetSession();
         vscode.window.showInformationMessage('Sesión reiniciada. Recarga la ventana.');
         vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }), 
+    // FIX-20260227-SORTING-DEBUG: Comando para limpiar store
+    vscode.commands.registerCommand('whatsapp.clearStore', async () => {
+        const answer = await vscode.window.showWarningMessage('¿Limpiar caché de mensajes? Esto puede arreglar el orden de chats pero vaciará la lista temporalmente.', 'Sí, limpiar', 'Cancelar');
+        if (answer === 'Sí, limpiar') {
+            const result = await client.clearStore();
+            if (result) {
+                vscode.window.showInformationMessage('Caché limpiado. Espera unos segundos a que lleguen nuevos mensajes o reinicia la extensión.');
+            }
+            else {
+                vscode.window.showErrorMessage('No se pudo limpiar el caché por completo.');
+            }
+        }
     }));
     // -----------------------------------------------------
     // --- FIX: SEC-002 - Usar globalStorageUri para historial ---

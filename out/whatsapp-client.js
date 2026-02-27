@@ -38,6 +38,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WhatsAppClient = void 0;
 const baileys_1 = __importStar(require("@whiskeysockets/baileys"));
+const store_fix_1 = require("./store-fix");
 const events_1 = __importDefault(require("events"));
 const pino_1 = __importDefault(require("pino"));
 const qrcode_1 = __importDefault(require("qrcode"));
@@ -47,7 +48,7 @@ class WhatsAppClient extends events_1.default {
     sock;
     state;
     saveCreds;
-    authPath;
+    authPath; // Path to store creds
     store;
     isConnecting = false;
     isReconnecting = false;
@@ -61,7 +62,7 @@ class WhatsAppClient extends events_1.default {
         }
         // --- FIX: Store robusto con manejo de errores ---
         try {
-            this.store = (0, baileys_1.makeInMemoryStore)({
+            this.store = (0, store_fix_1.makeInMemoryStore)({
                 logger: (0, pino_1.default)({ level: 'silent' })
             });
             const storePath = path.join(this.authPath, 'baileys_store_multi.json');
@@ -76,7 +77,7 @@ class WhatsAppClient extends events_1.default {
                 fs.unlinkSync(path.join(this.authPath, 'baileys_store_multi.json'));
             }
             catch (e) { }
-            this.store = (0, baileys_1.makeInMemoryStore)({ logger: (0, pino_1.default)({ level: 'silent' }) });
+            this.store = (0, store_fix_1.makeInMemoryStore)({ logger: (0, pino_1.default)({ level: 'silent' }) });
         }
         // Guardar store periódicamente
         setInterval(() => {
@@ -236,18 +237,33 @@ class WhatsAppClient extends events_1.default {
             // LOGICA CRITICA: DEEP SEARCH TIMESTAMP (Evitar chats viejos al principio)
             // -------------------------------------------------------------------------------------
             let timestamp = 0; // Por defecto: FONDO DE LA LISTA
+            let debugSource = 'NONE';
             // 1. FUENTE SUPREMA: El array de mensajes locales del store
             // Esto asegura que si tenemos mensajes, usemos el último de verdad
             if (messagesInStore.length > 0) {
                 // Iterar desde el final hacia el principio para encontrar el último mensaje con timestamp válido
                 for (let i = messagesInStore.length - 1; i >= 0; i--) {
                     const m = messagesInStore[i];
+                    // --- FILTRO DE MENSAJES DE SISTEMA / PROTOCOLO ---
+                    // Ignorar mensajes puramente técnicos que no deben reordenar el chat
+                    // protocolMessage: Revoke, Ephemeral settings
+                    // senderKeyDistributionMessage: Distribución de claves de cifrado (ruido de fondo)
+                    if (m.message?.protocolMessage ||
+                        m.message?.senderKeyDistributionMessage ||
+                        // @ts-ignore - messageStubType a veces no está en los tipos pero viene en el objeto
+                        (m.messageStubType && m.messageStubType === 2) /* CIPHERTEXT */) {
+                        continue;
+                    }
+                    // Ignorar updates de estado vacíos o irrelevantes
+                    // messageStubType 2 = CIPHERTEXT es común en "Waiting for this message" pero podría ser válido si es el único.
+                    // Sin embargo, si tenemos historial, preferimos mensajes reales.
                     let ts = m.messageTimestamp;
                     if (ts) {
                         // Normalizar Long / number
                         ts = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
                         if (ts > 0) {
                             timestamp = ts;
+                            debugSource = 'MSG'; // Encontrado en mensaje real
                             break;
                         }
                     }
@@ -263,13 +279,19 @@ class WhatsAppClient extends events_1.default {
                 const valSent = tSent ? (typeof tSent === 'number' ? tSent : (tSent.low || tSent.toNumber?.() || 0)) : 0;
                 if (valRecv > 0 || valSent > 0) {
                     timestamp = Math.max(valRecv, valSent);
+                    debugSource = 'META'; // Encontrado en metadata del chat
                 }
             }
             // 3. FUENTE TERCIARIA: 'conversationTimestamp' SOLO SI HAY MENSAJES NO LEÍDOS
             // Esto evita que actualizaciones de metadatos (foto, descripción) revivan chats de 2020.
             if (timestamp === 0 && chat.unreadCount > 0 && chat.conversationTimestamp) {
                 const ts = chat.conversationTimestamp;
-                timestamp = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
+                // SOLO si es razonablemente reciente (ej. > 2020) para evitar basura unix 0
+                const tsNum = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
+                if (tsNum > 1600000000) { // > Sept 2020
+                    timestamp = tsNum;
+                    debugSource = 'FALLBACK'; // Usando conversationTimestamp por unreadCount
+                }
             }
             // Explicit check for valid number
             const finalTimestamp = Number(timestamp);
@@ -291,10 +313,41 @@ class WhatsAppClient extends events_1.default {
                 timestamp: !isNaN(finalTimestamp) && finalTimestamp > 0 ? finalTimestamp : 0,
                 unreadCount: chat.unreadCount || 0,
                 isGroup: chat.id.endsWith('@g.us'),
-                lastMessage: content
+                lastMessage: content,
+                debugSource: debugSource // FIX-20260227-SORTING-DEBUG
             };
         })
             .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    }
+    // --- FIX: COMANDO PARA LIMPIAR STORE ---
+    async clearStore() {
+        console.log('Limpiando store (manteniendo sesión)...');
+        try {
+            // 1. Limpiar memoria
+            if (this.store) {
+                // No hay método oficial clear(), re-creamos
+                // this.store.chats.clear() si existiera
+            }
+            // 2. Borrar archivo físico
+            const storePath = path.join(this.authPath, 'baileys_store_multi.json');
+            if (fs.existsSync(storePath)) {
+                fs.unlinkSync(storePath);
+            }
+            // 3. Re-inicializar store vacío
+            this.store = (0, store_fix_1.makeInMemoryStore)({ logger: (0, pino_1.default)({ level: 'silent' }) });
+            if (this.sock) {
+                this.store.bind(this.sock.ev);
+            }
+            // 4. Forzar resync simple (pidiendo historial de nuevo es complejo), 
+            // mejor solo vaciar y dejar que entren nuevos o reiniciar extensión.
+            this.emit('chats.update', []);
+            console.log('Store limpiado.');
+            return true;
+        }
+        catch (e) {
+            console.error('Error limpiando store:', e);
+            return false;
+        }
     }
     async sendMessage(jid, text) {
         if (!this.sock)

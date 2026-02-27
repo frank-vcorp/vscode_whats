@@ -462,52 +462,48 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
     }
 
     private _renderChatList(): string {
-        const chatsHtml = this.chats.map(chat => {
-            // Enviamos el timestamp crudo al cliente para que lo procese con su zona horaria
-            const timestamp = chat.timestamp * 1000;
-            
-            // Script inline para formatear fecha en el cliente (navegador/webview)
-            const dateScript = `
-                <script>
-                    (function() {
-                        const ts = ${timestamp};
-                        const date = new Date(ts);
-                        const today = new Date();
-                        const isToday = date.getDate() === today.getDate() && 
-                                      date.getMonth() === today.getMonth() && 
-                                      date.getFullYear() === today.getFullYear();
-                        const isThisYear = date.getFullYear() === today.getFullYear();
-                        
-                        if (isToday) {
-                            document.write(date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}));
-                        } else if (isThisYear) {
-                            document.write(date.toLocaleDateString([], {day: '2-digit', month: '2-digit'}));
-                        } else {
-                            document.write(date.toLocaleDateString([], {day: '2-digit', month: '2-digit', year: '2-digit'}));
-                        }
-                    })();
-                </script>
-            `;
-
-            return `
-            <div class="chat-item" data-action="select-chat" data-jid="${this._escapeHtml(chat.jid)}">
-                <div class="chat-header">
-                    <span>${this._escapeHtml(chat.name || chat.jid.replace('@s.whatsapp.net', ''))}</span>
-                    <span style="font-size: 0.8em; color: var(--vscode-descriptionForeground);" class="chat-time" data-ts="${timestamp}">
-                        ${dateScript}
-                    </span>
-                </div>
-                <div class="chat-preview">
-                    ${this._escapeHtml(chat.lastMessage && chat.lastMessage.length > 50 ? chat.lastMessage.substring(0, 50) + '...' : chat.lastMessage || '...')}
-                </div>
-            </div>
-            `;
-        }).join('');
+        // Sort extra por seguridad aquí también
+        const sortedChats = [...this.chats].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
         return `
             <div id="chat-list">
-                <h3 style="padding: 10px;">Chats Recientes (${this.chats.length})</h3>
-                ${chatsHtml || '<div style="padding:20px; text-align:center;">No hay chats recientes</div>'}
+                <h3 style="padding: 10px;">Chats Recientes (${sortedChats.length})</h3>
+                <div class="list-container">
+                ${sortedChats.map(chat => {
+                    const timestamp = chat.timestamp * 1000;
+                    const date = new Date(timestamp);
+                    const timeString = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const dateString = date.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+                    const isToday = new Date().toDateString() === date.toDateString();
+                    const displayTime = isToday ? timeString : dateString;
+
+                    // FIX-20260227-SORTING-DEBUG: Mostrar fuente de la fecha
+                    const debugTag = chat.debugSource ? 
+                        `<span style="font-size: 0.6em; color: var(--vscode-errorForeground); margin-left: 5px; opacity: 0.7;" title="Fuente de fecha: ${chat.debugSource}">[${chat.debugSource}]</span>` 
+                        : '';
+
+                    return `
+                    <div class="chat-item" 
+                         data-action="select-chat" 
+                         data-jid="${this._escapeHtml(chat.jid)}"
+                         style="padding: 10px; border-bottom: 1px solid var(--vscode-widget-border); cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1; overflow: hidden;">
+                            <div style="font-weight: bold; display: flex; align-items: center;">
+                                ${this._escapeHtml(chat.name || chat.jid.split('@')[0])}
+                                ${debugTag}
+                            </div>
+                            <div style="font-size: 0.85em; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                ${this._escapeHtml(chat.lastMessage || '')}
+                            </div>
+                        </div>
+                        <div style="font-size: 0.75em; opacity: 0.6; min-width: 50px; text-align: right;">
+                            <div>${displayTime}</div>
+                            ${chat.unreadCount > 0 ? `<div style="background: var(--vscode-activityBarBadge-background); color: var(--vscode-activityBarBadge-foreground); border-radius: 10px; padding: 2px 6px; display: inline-block; font-size: 0.8em; margin-top: 2px;">${chat.unreadCount}</div>` : ''}
+                        </div>
+                    </div>
+                    `;
+                }).join('')}
+                </div>
             </div>
         `;
     }
