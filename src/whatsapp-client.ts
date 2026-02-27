@@ -222,7 +222,7 @@ export class WhatsAppClient extends EventEmitter {
         const chats = this.store.chats.all ? this.store.chats.all() : 
                      (this.store.chats instanceof Map ? Array.from(this.store.chats.values()) : Object.values(this.store.chats));
 
-        return chats.map((chat: any) => {
+        return chats.filter((chat: any) => chat.id !== 'status@broadcast').map((chat: any) => {
             const contact = this.store.contacts[chat.id] || {};
             const name = contact.name || contact.notify || chat.name || chat.id.split('@')[0];
             
@@ -235,12 +235,13 @@ export class WhatsAppClient extends EventEmitter {
             const msg = lastMsgFromStore || (chat.messages ? (chat.messages.all ? chat.messages.all()[0] : chat.messages[0]) : null);
             const lastMsg = msg || chat.lastMessageRecv || chat.lastMessage || {};
             
-            let timestamp = chat.conversationTimestamp;
-            if (lastMsg && lastMsg.messageTimestamp) {
-                timestamp = lastMsg.messageTimestamp;
-                if (typeof timestamp === 'object') timestamp = timestamp.low; // Long implementation
+            let timestamp: any = (lastMsg && lastMsg.messageTimestamp) ? lastMsg.messageTimestamp : (chat.conversationTimestamp || (Date.now() / 1000));
+
+            if (typeof timestamp === 'object' && timestamp !== null) {
+                timestamp = timestamp.low !== undefined ? timestamp.low : (timestamp.toNumber ? timestamp.toNumber() : timestamp);
             }
-            timestamp = timestamp || (Date.now() / 1000);
+            
+            const finalTimestamp = Number(timestamp);
 
             if (lastMsg && lastMsg.message) {
                  const m = lastMsg.message;
@@ -257,7 +258,7 @@ export class WhatsAppClient extends EventEmitter {
             return {
                 jid: chat.id,
                 name: name,
-                timestamp: chat.conversationTimestamp || (Date.now() / 1000),
+                timestamp: !isNaN(finalTimestamp) ? finalTimestamp : (Date.now() / 1000),
                 unreadCount: chat.unreadCount || 0,
                 isGroup: chat.id.endsWith('@g.us'),
                 lastMessage: content
