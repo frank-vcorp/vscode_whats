@@ -22,11 +22,13 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
     private activeChatJid?: string;
     private chats: ChatInfo[] = []; // Cache de lista de chats
     private messagesCache: Map<string, { sender: string, text: string, isSales?: boolean }[]> = new Map();
+    private readonly _extensionUri: vscode.Uri;
 
     constructor(
-        private readonly _extensionUri: vscode.Uri,
+        private readonly _context: vscode.ExtensionContext,
         private readonly _client: WhatsAppClient,
     ) {
+        this._extensionUri = _context.extensionUri;
         this._client.on('qr', (qr: string) => {
             this.lastQrCode = qr;
             this.updateHtml();
@@ -120,7 +122,14 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.onDidReceiveMessage(async (data) => {
             const jid = this.activeChatJid || 'unknown'; // JID actual
-            const historyPath = vscode.Uri.joinPath(this._extensionUri, 'context', 'whats_history.md').fsPath;
+            
+            // --- FIX: SEC-002 - Usar globalStorageUri ---
+            const storageDir = this._context.globalStorageUri;
+            if (!fs.existsSync(storageDir.fsPath)) {
+                fs.mkdirSync(storageDir.fsPath, { recursive: true });
+            }
+            const historyPath = vscode.Uri.joinPath(storageDir, 'whats_history.md').fsPath;
+            // ----------------------------------------------
 
             switch (data.type) {
                 case 'selectChat':
@@ -264,6 +273,9 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
             <html lang="es">
             <head>
                 <meta charset="UTF-8">
+                <!-- FIX: SEC-001 - CSP segura -->
+                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} https: data:;">
+                <!-- ------------------------ -->
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <script type="module" src="${toolkitUri}"></script>
                 <style>
@@ -381,21 +393,34 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                 <script>
                     const vscode = acquireVsCodeApi();
                     
-                    // List handlers
-                    function selectChat(jid) {
-                        vscode.postMessage({ type: 'selectChat', jid: jid });
-                    }
+                    // Manejo centralizado de eventos (Event Delegation)
+                    document.addEventListener('click', (e) => {
+                        const target = e.target;
+                        
+                        // 1. Selector de Chat
+                        const chatItem = target.closest('[data-action="select-chat"]');
+                        if (chatItem) {
+                            const jid = chatItem.getAttribute('data-jid');
+                            if (jid) vscode.postMessage({ type: 'selectChat', jid });
+                            return;
+                        }
 
-                    // Conversación handlers
+                        // 2. Copilot Action (Span o Botón)
+                        const copilotAction = target.closest('[data-action="ask-copilot"]');
+                        if (copilotAction) {
+                            const text = copilotAction.getAttribute('data-text');
+                            const isSales = copilotAction.getAttribute('data-is-sales') === 'true';
+                            if (text) vscode.postMessage({ type: 'askCopilot', text, isSales });
+                            return;
+                        }
+                    });
+
+                    // Elementos UI
                     const list = document.getElementById('messages-list');
                     const input = document.getElementById('message-input');
                     const sendBtn = document.getElementById('send-btn');
                     const backBtn = document.getElementById('back-btn');
                     const clipBtn = document.getElementById('clip-btn');
-
-                    function askCopilot(text, isSales) {
-                        vscode.postMessage({ type: 'askCopilot', text: text, isSales: isSales });
-                    }
 
                     if (backBtn) {
                         backBtn.addEventListener('click', () => {
@@ -438,7 +463,7 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
     private _renderChatList(): string {
         const chatsHtml = this.chats.map(chat => `
-            <div class="chat-item" onclick="selectChat('${chat.jid}')">
+            <div class="chat-item" data-action="select-chat" data-jid="${this._escapeHtml(chat.jid)}">
                 <div class="chat-header">
                     <span>${this._escapeHtml(chat.name || chat.jid)}</span>
                     <span>${new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
@@ -467,14 +492,21 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                 <div class="message-header">
                     <span class="sender">${this._escapeHtml(m.sender)}</span>
                     ${m.sender !== 'Yo' ? `
-                        <span class="copilot-action" onclick="askCopilot('${this._escapeHtml(m.text).replace(/'/g, "\\'")}', ${m.isSales})" title="Pedir ayuda a Copilot">🤖</span>
+                        <span class="copilot-action" 
+                              data-action="ask-copilot" 
+                              data-text="${this._escapeHtml(m.text)}" 
+                              data-is-sales="${m.isSales || false}" 
+                              title="Pedir ayuda a Copilot">🤖</span>
                     ` : ''}
                     ${m.isSales ? '<span class="sales-icon" title="Oportunidad de Venta">💰</span>' : ''}
                 </div>
                 <div class="text">${this._escapeHtml(m.text)}</div>
                 ${m.isSales ? `
                     <div class="sales-actions">
-                        <vscode-button appearance="secondary" style="font-size: 0.8em; padding: 2px 5px;" onclick="askCopilot('${this._escapeHtml(m.text).replace(/'/g, "\\'")}', true)">
+                        <vscode-button appearance="secondary" style="font-size: 0.8em; padding: 2px 5px;" 
+                                       data-action="ask-copilot" 
+                                       data-text="${this._escapeHtml(m.text)}" 
+                                       data-is-sales="true">
                             Generar Cotización
                         </vscode-button>
                     </div>

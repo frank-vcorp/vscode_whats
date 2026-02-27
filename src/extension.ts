@@ -11,8 +11,22 @@ import { WhatsAppClient } from './whatsapp-client.js';
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Felicidades, tu extensión "vscode-whats" ahora está activa.');
 
-    const client = new WhatsAppClient(context.globalStorageUri.fsPath);
-    const provider = new WhatsAppViewProvider(context.extensionUri, client);
+    // --- FIX: SEC-002 - Usar globalStorageUri para historial ---
+    const storageDir = context.globalStorageUri;
+    try {
+        await vscode.workspace.fs.createDirectory(storageDir);
+    } catch (error) {
+        console.error('Error al crear directorio de almacenamiento:', error);
+    }
+    
+    // Inicializar cliente con storagePath correcto
+    const client = new WhatsAppClient(storageDir.fsPath);
+    // -----------------------------------------------------------
+    
+    // --- FIX: SEC-002 - Pasar context completo ---
+    const provider = new WhatsAppViewProvider(context, client);
+    // ----------------------------------------------
+    // ----------------------------------------------
 
     // --- Notificaciones en StatusBar (IMPL-20260227-07) ---
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -47,13 +61,9 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     // -----------------------------------------------------
 
-    const historyPath = path.join(context.extensionPath, 'context', 'whats_history.md');
-
-    // Asegurar que el directorio context existe
-    const contextDir = path.dirname(historyPath);
-    if (!fs.existsSync(contextDir)) {
-        fs.mkdirSync(contextDir, { recursive: true });
-    }
+    // --- FIX: SEC-002 - Usar globalStorageUri para historial ---
+    const historyPath = path.join(storageDir.fsPath, 'whats_history.md');
+    // -----------------------------------------------------------
 
     // Iniciar comando para Copilot
     context.subscriptions.push(

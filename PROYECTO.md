@@ -1,26 +1,25 @@
-# PROYECTO: WhatsApp for VS Code (v0.4.0 - Sales Agent & Contacts)
-**Estado:** [/] En Progreso
+# PROYECTO: WhatsApp for VS Code (v0.5.0 - Status Bar & Polish)
+**Estado:** [✓] Completado
 
-## 📋 MICRO-SPRINT: Contactos Reales y Cerebro Comercial
+## 📋 MICRO-SPRINT: Integración en Status Bar
 **Fecha:** 2026-02-27  
-**ID:** ARCH-20260227-04  
-**Duración estimada:** 4 horas  
+**ID:** IMPL-20260227-07  
+**Duración estimada:** 2 horas  
+**Estado:** [✓] Completado
 
 ### 🎯 Entregable Demostrable
-> Panel lateral con lista de chats recientes reales. Al seleccionar uno, se carga la conversación. Si un mensaje contiene palabras clave de venta (ej: "precio"), se resalta y ofrece un botón de "Generar Cotización".
+> Icono de WhatsApp en la Status Bar (barra inferior) que muestra el contador de mensajes no leídos. Al hacer clic, abre/cierra el Sidebar. Las notificaciones invasivas (popups) están eliminadas.
 
 ### ✅ Tareas Técnicas
-- [✓] Implementar `client.fetchChats` en Baileys para obtener lista real [✓]
-- [✓] UI de Lista de Contactos (Avatar + Nombre + Último Mensaje) [✓]
-- [✓] Lógica de selección de chat activo (Cargar historial del contacto) [✓]
-- [✓] **Sales Detector**: Regex para palabras clave ("precio", "costo", "cotización") -> Resaltado dorado en UI [✓]
-- [✓] Botón "Generar Cotización" -> Invoca comando de Copilot con prompt de ventas [✓]
+- [✓] Implementar `vscode.window.createStatusBarItem` [✓]
+- [✓] Lógica de contador de mensajes no leídos (desde Baileys) [✓]
+- [✓] Comando `whatsapp.focus` para abrir el Sidebar desde la Status Bar [✓]
+- [✓] Eliminar `vscode.window.showInformationMessage` para mensajes nuevos [✓]
 
 ### 🧪 Cómo Demostrar
-1. Ver lista de chats reales en el Sidebar.
-2. Abrir un chat con un mensaje de prueba "cuánto cuesta una web".
-3. Ver que el mensaje brilla en dorado.
-4. Pulsar el botón de cotización y ver el borrador generado.
+1. Ver el icono `$(comment-discussion)` en la barra inferior (derecha, junto a notificaciones).
+2. Recibir mensajes y ver que el contador sube: `$(comment-discussion) 3`.
+3. Hacer clic en el icono y ver que se despliega automáticamente el Sidebar de WhatsApp.
 
 ### 🎯 Entregable Demostrable
 > La extensión muestra notificaciones nativas en VS Code al llegar un mensaje y permite adjuntar archivos locales del ordenador para enviarlos por el chat.
@@ -52,6 +51,14 @@
 ### Fase 3: Inteligencia y Archivos
 - [✓] (13) Botón "Responder con Copilot" [✓]
 - [/] (8) Subida/Descarga de archivos nativa [/]
+
+## ⚠️ Deuda Técnica Crítica & Seguridad (MITIGADA)
+| ID | Descripción | Prioridad | Estado |
+|----|-------------|-----------|--------|
+| SEC-001 | **XSS/Inyección en Webview**: Eliminados `onclick` por event listeners y data-attributes | **P0 (Crítica)** | [✓] |
+| SEC-002 | **Storage Incorrecto**: Migrado a `globalStorageUri` | **P1 (Bloqueante)** | [✓] |
+| FIX-001 | **Reconexión Inestable**: Implementado debounce y limpieza de listeners | **P1 (Bloqueante)** | [✓] |
+| SEC-003 | **CSP Faltante**: Agregada Content Security Policy estricta | **P1 (Seguridad)** | [✓] |
 
 ## ⚠️ Deuda Técnica
 | ID | Descripción | Impacto | Estado |

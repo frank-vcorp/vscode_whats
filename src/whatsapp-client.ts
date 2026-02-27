@@ -33,6 +33,9 @@ export class WhatsAppClient extends EventEmitter {
     private saveCreds: any;
     private authPath: string;
     private chats: Map<string, ChatInfo> = new Map();
+    private isConnecting: boolean = false;
+    private isReconnecting: boolean = false;
+    private reconnectTimeout: NodeJS.Timeout | undefined;
 
     constructor(storagePath: string) {
         super();
@@ -43,53 +46,101 @@ export class WhatsAppClient extends EventEmitter {
     }
 
     async connect() {
-        const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
-        this.state = state;
-        this.saveCreds = saveCreds;
+        if (this.isConnecting || this.isReconnecting) {
+            console.log('Conexión/Reconexión en curso, ignorando llamada duplicada.');
+            return;
+        }
+        this.isConnecting = true;
 
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`Usando Baileys v${version.join('.')}, isLatest: ${isLatest}`);
+        // --- FIX: Cleanup robusto antes de reconectar ---
+        if (this.sock) {
+            try {
+                this.sock.ws?.close(); // Cerrar WS si existe
+                this.sock.ev.removeAllListeners('connection.update');
+                this.sock.ev.removeAllListeners('creds.update');
+                this.sock.ev.removeAllListeners('messages.upsert');
+                this.sock.ev.removeAllListeners('chats.upsert');
+                this.sock.ev.removeAllListeners('chats.update');
+            } catch (e) {
+                console.warn('Error limpiando socket anterior:', e);
+            }
+            this.sock = undefined;
+        }
+        // -----------------------------------------------
 
-        const logger = pino({ level: 'silent' });
+        try {
+            const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
+            this.state = state;
+            this.saveCreds = saveCreds;
 
-        this.sock = makeWASocket({
-            version,
-            logger,
-            printQRInTerminal: false,
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger),
-            },
-            generateHighQualityLinkPreview: true,
-        });
+            const { version, isLatest } = await fetchLatestBaileysVersion();
+            console.log(`Usando Baileys v${version.join('.')}, isLatest: ${isLatest}`);
 
-        this.sock.ev.on('connection.update', async (update: any) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            if (qr) {
-                try {
-                    const qrBase64 = await QRCode.toDataURL(qr);
-                    this.emit('qr', qrBase64);
-                } catch (err) {
-                    console.error('Error generando QR:', err);
-                }
+            // Limpiar socket anterior si existe (evitar memory leaks / listeners zombies)
+            if (this.sock) {
+                this.sock.ev.removeAllListeners('connection.update');
+                this.sock.ev.removeAllListeners('creds.update');
+                this.sock.ev.removeAllListeners('messages.upsert');
             }
 
-            if (connection === 'close') {
-                const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-                console.log('Conexión cerrada:', lastDisconnect?.error, 'reintentando:', shouldReconnect);
-                if (shouldReconnect) {
-                    this.connect();
+            const logger = pino({ level: 'silent' });
+
+            this.sock = makeWASocket({
+                version,
+                logger,
+                printQRInTerminal: false,
+                auth: {
+                    creds: state.creds,
+                    keys: makeCacheableSignalKeyStore(state.keys, logger),
+                },
+                generateHighQualityLinkPreview: true,
+            });
+
+            this.sock.ev.on('connection.update', (update: any) => {
+                const { connection, lastDisconnect, qr } = update;
+
+                if (qr) {
+                    QRCode.toDataURL(qr).then((url) => {
+                        this.emit('qr', url);
+                    }).catch(console.error);
                 }
-            } else if (connection === 'open') {
-                console.log('Conexión de WhatsApp abierta');
-                this.emit('connected');
-                // Intentar cargar chats iniciales si es posible, o esperar eventos
-            }
-        });
 
-        this.sock.ev.on('creds.update', saveCreds);
+                if (connection === 'close') {
+                    // Resetear flag para permitir futura reconexión
+                    this.isConnecting = false;
+                    
+                    const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+                    console.log('Conexión cerrada. Reintentando:', shouldReconnect);
+                    
+                    if (shouldReconnect) {
+                         this.isReconnecting = true;
+                         // Backoff simple de 2s para evitar bucles rápidos
+                         if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+                         this.reconnectTimeout = setTimeout(() => {
+                             this.isReconnecting = false; // Reset antes de llamar
+                             this.connect();
+                         }, 2000);
+                    }
+                } else if (connection === 'open') {
+                    this.isConnecting = false;
+                    this.isReconnecting = false;
+                    console.log('Conexión de WhatsApp abierta');
+                    this.emit('connected');
+                }
+            });
 
+            this.sock.ev.on('creds.update', saveCreds);
+
+            // Manejo de mensajes (re-registrar listeners en el nuevo socket)
+            this._registerMessageHandlers();
+
+        } catch (error) {
+            console.error('Error fatal al conectar:', error);
+            this.isConnecting = false;
+        }
+    }
+
+    private _registerMessageHandlers() {
         // Manejo de chats
         this.sock.ev.on('chats.upsert', (newChats: any[]) => {
             console.log('Chats upsert:', newChats.length);
@@ -106,33 +157,28 @@ export class WhatsAppClient extends EventEmitter {
             this.emit('chats.update', this.getChats());
         });
 
-        // Emitir mensajes para el historial si es necesario en el futuro
         this.sock.ev.on('messages.upsert', async (m: any) => {
-            console.log('Mensajes upsert:', m.messages.length, m.type);
             if (m.type === 'notify' || m.type === 'append') {
                 const msg = m.messages[0];
                 if (!msg.key.remoteJid) return;
 
-                // Actualizar chat info con el último mensaje
                 const jid = msg.key.remoteJid;
-                const text = msg.message?.conversation || 
-                             msg.message?.extendedTextMessage?.text || 
-                             msg.message?.imageMessage?.caption || 
-                             (msg.message?.imageMessage ? '[Imagen]' : '[Mensaje]');
                 
                 const timestamp = (typeof msg.messageTimestamp === 'number') 
                     ? msg.messageTimestamp 
                     : (msg.messageTimestamp?.low || Date.now() / 1000);
+                
+                const currentChat = this.chats.get(jid);
+                const newUnread = !msg.key.fromMe ? ((currentChat?.unreadCount || 0) + 1) : 0;
 
                 this._updateChat(jid, {
                     conversationTimestamp: timestamp,
-                    unreadCount: 1 // Simplificado, idealmente incrementar
+                    unreadCount: newUnread
                 });
 
-                // Si es un mensaje nuevo entrante (no histórico), emitirlo
                 if (m.type === 'notify') {
                     this.emit('message', msg);
-                    this.emit('chats.update', this.getChats()); // Reordenar lista
+                    this.emit('chats.update', this.getChats()); 
                 }
             }
         });

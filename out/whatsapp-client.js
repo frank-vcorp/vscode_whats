@@ -49,6 +49,9 @@ class WhatsAppClient extends events_1.default {
     saveCreds;
     authPath;
     chats = new Map();
+    isConnecting = false;
+    isReconnecting = false;
+    reconnectTimeout;
     constructor(storagePath) {
         super();
         this.authPath = path.join(storagePath, 'whatsapp-auth');
@@ -57,47 +60,90 @@ class WhatsAppClient extends events_1.default {
         }
     }
     async connect() {
-        const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(this.authPath);
-        this.state = state;
-        this.saveCreds = saveCreds;
-        const { version, isLatest } = await (0, baileys_1.fetchLatestBaileysVersion)();
-        console.log(`Usando Baileys v${version.join('.')}, isLatest: ${isLatest}`);
-        const logger = (0, pino_1.default)({ level: 'silent' });
-        this.sock = (0, baileys_1.default)({
-            version,
-            logger,
-            printQRInTerminal: false,
-            auth: {
-                creds: state.creds,
-                keys: (0, baileys_1.makeCacheableSignalKeyStore)(state.keys, logger),
-            },
-            generateHighQualityLinkPreview: true,
-        });
-        this.sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            if (qr) {
-                try {
-                    const qrBase64 = await qrcode_1.default.toDataURL(qr);
-                    this.emit('qr', qrBase64);
-                }
-                catch (err) {
-                    console.error('Error generando QR:', err);
-                }
+        if (this.isConnecting || this.isReconnecting) {
+            console.log('Conexión/Reconexión en curso, ignorando llamada duplicada.');
+            return;
+        }
+        this.isConnecting = true;
+        // --- FIX: Cleanup robusto antes de reconectar ---
+        if (this.sock) {
+            try {
+                this.sock.ws?.close(); // Cerrar WS si existe
+                this.sock.ev.removeAllListeners('connection.update');
+                this.sock.ev.removeAllListeners('creds.update');
+                this.sock.ev.removeAllListeners('messages.upsert');
+                this.sock.ev.removeAllListeners('chats.upsert');
+                this.sock.ev.removeAllListeners('chats.update');
             }
-            if (connection === 'close') {
-                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== baileys_1.DisconnectReason.loggedOut;
-                console.log('Conexión cerrada:', lastDisconnect?.error, 'reintentando:', shouldReconnect);
-                if (shouldReconnect) {
-                    this.connect();
+            catch (e) {
+                console.warn('Error limpiando socket anterior:', e);
+            }
+            this.sock = undefined;
+        }
+        // -----------------------------------------------
+        try {
+            const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(this.authPath);
+            this.state = state;
+            this.saveCreds = saveCreds;
+            const { version, isLatest } = await (0, baileys_1.fetchLatestBaileysVersion)();
+            console.log(`Usando Baileys v${version.join('.')}, isLatest: ${isLatest}`);
+            // Limpiar socket anterior si existe (evitar memory leaks / listeners zombies)
+            if (this.sock) {
+                this.sock.ev.removeAllListeners('connection.update');
+                this.sock.ev.removeAllListeners('creds.update');
+                this.sock.ev.removeAllListeners('messages.upsert');
+            }
+            const logger = (0, pino_1.default)({ level: 'silent' });
+            this.sock = (0, baileys_1.default)({
+                version,
+                logger,
+                printQRInTerminal: false,
+                auth: {
+                    creds: state.creds,
+                    keys: (0, baileys_1.makeCacheableSignalKeyStore)(state.keys, logger),
+                },
+                generateHighQualityLinkPreview: true,
+            });
+            this.sock.ev.on('connection.update', (update) => {
+                const { connection, lastDisconnect, qr } = update;
+                if (qr) {
+                    qrcode_1.default.toDataURL(qr).then((url) => {
+                        this.emit('qr', url);
+                    }).catch(console.error);
                 }
-            }
-            else if (connection === 'open') {
-                console.log('Conexión de WhatsApp abierta');
-                this.emit('connected');
-                // Intentar cargar chats iniciales si es posible, o esperar eventos
-            }
-        });
-        this.sock.ev.on('creds.update', saveCreds);
+                if (connection === 'close') {
+                    // Resetear flag para permitir futura reconexión
+                    this.isConnecting = false;
+                    const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== baileys_1.DisconnectReason.loggedOut;
+                    console.log('Conexión cerrada. Reintentando:', shouldReconnect);
+                    if (shouldReconnect) {
+                        this.isReconnecting = true;
+                        // Backoff simple de 2s para evitar bucles rápidos
+                        if (this.reconnectTimeout)
+                            clearTimeout(this.reconnectTimeout);
+                        this.reconnectTimeout = setTimeout(() => {
+                            this.isReconnecting = false; // Reset antes de llamar
+                            this.connect();
+                        }, 2000);
+                    }
+                }
+                else if (connection === 'open') {
+                    this.isConnecting = false;
+                    this.isReconnecting = false;
+                    console.log('Conexión de WhatsApp abierta');
+                    this.emit('connected');
+                }
+            });
+            this.sock.ev.on('creds.update', saveCreds);
+            // Manejo de mensajes (re-registrar listeners en el nuevo socket)
+            this._registerMessageHandlers();
+        }
+        catch (error) {
+            console.error('Error fatal al conectar:', error);
+            this.isConnecting = false;
+        }
+    }
+    _registerMessageHandlers() {
         // Manejo de chats
         this.sock.ev.on('chats.upsert', (newChats) => {
             console.log('Chats upsert:', newChats.length);
@@ -112,30 +158,24 @@ class WhatsAppClient extends events_1.default {
             }
             this.emit('chats.update', this.getChats());
         });
-        // Emitir mensajes para el historial si es necesario en el futuro
         this.sock.ev.on('messages.upsert', async (m) => {
-            console.log('Mensajes upsert:', m.messages.length, m.type);
             if (m.type === 'notify' || m.type === 'append') {
                 const msg = m.messages[0];
                 if (!msg.key.remoteJid)
                     return;
-                // Actualizar chat info con el último mensaje
                 const jid = msg.key.remoteJid;
-                const text = msg.message?.conversation ||
-                    msg.message?.extendedTextMessage?.text ||
-                    msg.message?.imageMessage?.caption ||
-                    (msg.message?.imageMessage ? '[Imagen]' : '[Mensaje]');
                 const timestamp = (typeof msg.messageTimestamp === 'number')
                     ? msg.messageTimestamp
                     : (msg.messageTimestamp?.low || Date.now() / 1000);
+                const currentChat = this.chats.get(jid);
+                const newUnread = !msg.key.fromMe ? ((currentChat?.unreadCount || 0) + 1) : 0;
                 this._updateChat(jid, {
                     conversationTimestamp: timestamp,
-                    unreadCount: 1 // Simplificado, idealmente incrementar
+                    unreadCount: newUnread
                 });
-                // Si es un mensaje nuevo entrante (no histórico), emitirlo
                 if (m.type === 'notify') {
                     this.emit('message', msg);
-                    this.emit('chats.update', this.getChats()); // Reordenar lista
+                    this.emit('chats.update', this.getChats());
                 }
             }
         });
