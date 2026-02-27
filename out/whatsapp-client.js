@@ -224,8 +224,8 @@ class WhatsAppClient extends events_1.default {
         const chats = this.store.chats.all ? this.store.chats.all() :
             (this.store.chats instanceof Map ? Array.from(this.store.chats.values()) : Object.values(this.store.chats));
         return chats.filter((chat) => chat.id !== 'status@broadcast').map((chat) => {
-            const contact = this.store.contacts[chat.id] || {};
-            const name = contact.name || contact.notify || chat.name || chat.id.split('@')[0];
+            // FIX: Mejor resolución de nombres usando helper
+            const name = this.getContactName(chat.id) || chat.name || chat.id.split('@')[0];
             // Extract message content safely
             let content = '...';
             // Baileys v6 store structure might differ slightly
@@ -357,6 +357,30 @@ class WhatsAppClient extends events_1.default {
     }
     getSocket() {
         return this.sock;
+    }
+    getMyselfJid() {
+        // Normalizar el JID del usuario (eliminar :device@...)
+        const id = this.sock?.user?.id;
+        return id ? id.split(':')[0] + '@s.whatsapp.net' : undefined;
+    }
+    getChatMessages(jid, limit = 50) {
+        if (!this.store || !this.store.messages)
+            return [];
+        const msgs = this.store.messages[jid];
+        if (!msgs)
+            return [];
+        // Si es un array directo (nuestra impl simple) o un objeto con array (Baileys original)
+        const msgList = Array.isArray(msgs) ? msgs : (msgs.array || []);
+        // Devolver los últimos N mensajes
+        return msgList.slice(-limit);
+    }
+    getContactName(jid) {
+        if (!this.store)
+            return jid.split('@')[0];
+        // Normalizar JID para búsqueda en contactos
+        const id = jid.split('@')[0] + '@s.whatsapp.net';
+        const contact = this.store.contacts[id] || this.store.contacts[jid];
+        return contact?.name || contact?.notify || contact?.verifiedName || jid.split('@')[0];
     }
 }
 exports.WhatsAppClient = WhatsAppClient;

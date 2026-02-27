@@ -60,9 +60,10 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
             if (jid && text) {
                 const isMe = msg.key.fromMe;
-                const sender = isMe ? 'Yo' : (msg.pushName || jid.split('@')[0]); // Nombre simple
+                // Usar helper de cliente para nombre consistente
+                const sender = isMe ? 'Yo' : (msg.pushName || this._client.getContactName(jid)); 
                 
-                this.addMessageToCache(jid, sender, text);
+                this.addMessageToCache(jid, sender, text, isMe);
                 
                 // Si estamos viendo este chat, actualizar
                 if (this.currentView === 'chat' && this.activeChatJid === jid) {
@@ -84,17 +85,47 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
         return salesRegex.test(text);
     }
 
-    private addMessageToCache(jid: string, sender: string, text: string) {
+    private loadHistoryForChat(jid: string) {
+        // Limpiar cache actual para este chat para evitar duplicados al recargar
+        // o podríamos mezclar, pero por ahora reemplazamos con la verdad del store
+        this.messagesCache.set(jid, []);
+
+        const history = this._client.getChatMessages(jid, 50);
+        
+        history.forEach(msg => {
+            const text = msg.message?.conversation || 
+                         msg.message?.extendedTextMessage?.text || 
+                         msg.message?.imageMessage?.caption || 
+                         (msg.message?.imageMessage ? '[Imagen]' : undefined);
+            
+            if (text) {
+                // Determinar sender
+                const isMe = msg.key.fromMe || msg.key.participant === this._client.getMyselfJid();
+                // Si es grupo, el pushName viene en msg top level o en participation
+                const senderName = isMe ? 'Yo' : (msg.pushName || this._client.getContactName(msg.key.participant || jid));
+
+                this.addMessageToCache(jid, senderName, text, isMe); // Pasar isMe explícito
+            }
+        });
+    }
+
+    private addMessageToCache(jid: string, sender: string, text: string, isMeParam?: boolean) {
         if (!this.messagesCache.has(jid)) {
             this.messagesCache.set(jid, []);
         }
         const chatMsgs = this.messagesCache.get(jid)!;
+        
+        // Detectar si es 'Yo' basado en el string sender (legacy) o el param explícito
+        const isMe = isMeParam !== undefined ? isMeParam : (sender === 'Yo');
+
         chatMsgs.push({ 
-            sender, 
+            sender: isMe ? 'Yo' : sender, // Normalizar sender 'Yo'
             text, 
             isSales: this.isSalesOpportunity(text) 
         });
-        if (chatMsgs.length > 50) chatMsgs.shift();
+        
+        // Mantener tamaño razonable
+        if (chatMsgs.length > 100) chatMsgs.shift();
     }
 
     public isVisible(): boolean {
@@ -135,6 +166,11 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
                 case 'selectChat':
                     this.activeChatJid = data.jid;
                     this.currentView = 'chat';
+                    
+                    // --- FIX: Cargar historial del store ---
+                    this.loadHistoryForChat(data.jid);
+                    // ---------------------------------------
+
                     this.updateHtml();
                     break;
                 
@@ -512,6 +548,9 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
         if (!this.activeChatJid) return '';
         
         const msgs = this.messagesCache.get(this.activeChatJid) || [];
+
+        // Obtener nombre del chat para el header
+        const chatName = this._client.getContactName(this.activeChatJid);
         
         const messagesHtml = msgs.map(m => `
             <div class="message ${m.sender === 'Yo' ? 'sent' : 'received'} ${m.isSales ? 'sales-opportunity' : ''}">
@@ -544,7 +583,7 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
             <div id="chat-container">
                 <div id="chat-header-bar">
                     <vscode-button id="back-btn" appearance="icon">⬅️</vscode-button>
-                    <h3>${this._escapeHtml(this.activeChatJid)}</h3>
+                    <h3>${this._escapeHtml(chatName || this.activeChatJid)}</h3>
                 </div>
                 <div id="messages-list">
                     ${messagesHtml}
