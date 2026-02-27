@@ -232,20 +232,44 @@ class WhatsAppClient extends events_1.default {
             const lastMsgFromStore = messagesInStore.length > 0 ? messagesInStore[messagesInStore.length - 1] : null;
             const msg = lastMsgFromStore || (chat.messages ? (chat.messages.all ? chat.messages.all()[0] : chat.messages[0]) : null);
             const lastMsg = msg || chat.lastMessageRecv || chat.lastMessage || {};
-            // Timestamp logic fix: Prevent old chats from rising to top
-            // 1. Last message specific timestamp (message in store) -> BEST
-            // 2. Last message from chat object -> GOOD
-            // 3. Conversation timestamp -> OKAY
-            // 4. ZERO -> If nothing found, it's very old/empty, send to bottom. NEVER Date.now()
-            let timestamp = 0;
-            if (lastMsg && lastMsg.messageTimestamp) {
-                timestamp = lastMsg.messageTimestamp;
+            // -------------------------------------------------------------------------------------
+            // LOGICA CRITICA: DEEP SEARCH TIMESTAMP (Evitar chats viejos al principio)
+            // -------------------------------------------------------------------------------------
+            let timestamp = 0; // Por defecto: FONDO DE LA LISTA
+            // 1. FUENTE SUPREMA: El array de mensajes locales del store
+            // Esto asegura que si tenemos mensajes, usemos el último de verdad
+            if (messagesInStore.length > 0) {
+                // Iterar desde el final hacia el principio para encontrar el último mensaje con timestamp válido
+                for (let i = messagesInStore.length - 1; i >= 0; i--) {
+                    const m = messagesInStore[i];
+                    let ts = m.messageTimestamp;
+                    if (ts) {
+                        // Normalizar Long / number
+                        ts = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
+                        if (ts > 0) {
+                            timestamp = ts;
+                            break;
+                        }
+                    }
+                }
             }
-            else if (chat.conversationTimestamp) {
-                timestamp = chat.conversationTimestamp;
+            // 2. FUENTE SECUNDARIA: Propiedad del chat 'lastMessageRecv' / 'lastMessage'
+            // Si el store estaba vacío (chat muy viejo sin sync de mensajes), usamos la metadata del chat
+            if (timestamp === 0) {
+                const tRecv = chat.lastMessageRecv?.messageTimestamp;
+                const tSent = chat.lastMessage?.messageTimestamp;
+                // Normalizar
+                const valRecv = tRecv ? (typeof tRecv === 'number' ? tRecv : (tRecv.low || tRecv.toNumber?.() || 0)) : 0;
+                const valSent = tSent ? (typeof tSent === 'number' ? tSent : (tSent.low || tSent.toNumber?.() || 0)) : 0;
+                if (valRecv > 0 || valSent > 0) {
+                    timestamp = Math.max(valRecv, valSent);
+                }
             }
-            if (typeof timestamp === 'object' && timestamp !== null) {
-                timestamp = timestamp.low !== undefined ? timestamp.low : (timestamp.toNumber ? timestamp.toNumber() : timestamp);
+            // 3. FUENTE TERCIARIA: 'conversationTimestamp' SOLO SI HAY MENSAJES NO LEÍDOS
+            // Esto evita que actualizaciones de metadatos (foto, descripción) revivan chats de 2020.
+            if (timestamp === 0 && chat.unreadCount > 0 && chat.conversationTimestamp) {
+                const ts = chat.conversationTimestamp;
+                timestamp = typeof ts === 'number' ? ts : (ts.low || ts.toNumber?.() || 0);
             }
             // Explicit check for valid number
             const finalTimestamp = Number(timestamp);
