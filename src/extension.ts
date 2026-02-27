@@ -5,14 +5,47 @@ import { WhatsAppViewProvider } from './WhatsAppViewProvider.js';
 import { WhatsAppClient } from './whatsapp-client.js';
 
 /**
- * @intervention IMPL-20260227-05
- * @see context/checkpoints/CHK_20260227_NOTIFY_MEDIA.md
+ * @intervention IMPL-20260227-07
+ * @see context/checkpoints/CHK_20260227_STATUSBAR.md
  */
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Felicidades, tu extensión "vscode-whats" ahora está activa.');
 
     const client = new WhatsAppClient(context.globalStorageUri.fsPath);
     const provider = new WhatsAppViewProvider(context.extensionUri, client);
+
+    // --- Notificaciones en StatusBar (IMPL-20260227-07) ---
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.command = 'whatsapp.focus';
+    context.subscriptions.push(statusBarItem);
+    
+    let unreadMessages = 0;
+    const updateStatusBar = () => {
+        if (unreadMessages > 0) {
+            statusBarItem.text = `$(comment-discussion) ${unreadMessages}`;
+            statusBarItem.tooltip = `${unreadMessages} mensajes nuevos en WhatsApp`;
+            statusBarItem.show();
+        } else {
+            statusBarItem.hide();
+        }
+    };
+
+    // Resetear contador cuando se abre la vista
+    provider.onDidChangeVisibility((visible) => {
+        if (visible) {
+            unreadMessages = 0;
+            updateStatusBar();
+        }
+    });
+
+    // Registrar comando para enfocar la vista
+    context.subscriptions.push(
+        vscode.commands.registerCommand('whatsapp.focus', () => {
+            // "whatsapp-view" es el ID definido en package.json
+            vscode.commands.executeCommand('whatsapp-view.focus');
+        })
+    );
+    // -----------------------------------------------------
 
     const historyPath = path.join(context.extensionPath, 'context', 'whats_history.md');
 
@@ -79,16 +112,17 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             // Nota: El provider ya escucha 'message' internamente para actualizar la UI.
-            // provider.addMessage(senderName, messageText); <-- Eliminado
-
-            // Notificación si no está visible
+            
+            // Actualizar StatusBar si la vista no es visible
             if (!provider.isVisible()) {
-                const preview = messageText.length > 50 ? messageText.substring(0, 47) + '...' : messageText;
-                vscode.window.showInformationMessage(`WhatsApp: ${senderName}: ${preview}`, 'Ver Chat').then(selection => {
-                    if (selection === 'Ver Chat') {
-                        vscode.commands.executeCommand('whatsapp.focus'); 
-                    }
-                });
+                unreadMessages++;
+                updateStatusBar();
+            } else {
+                // Si es visible, asumimos que se leyó (o al menos se vió)
+                // Opcional: Podría requerir lógica más compleja de "Chat activo", 
+                // pero por ahora simplificamos: visible = leído.
+                unreadMessages = 0;
+                updateStatusBar();
             }
         }
     });

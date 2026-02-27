@@ -10,11 +10,11 @@
 > Panel lateral con lista de chats recientes reales. Al seleccionar uno, se carga la conversación. Si un mensaje contiene palabras clave de venta (ej: "precio"), se resalta y ofrece un botón de "Generar Cotización".
 
 ### ✅ Tareas Técnicas
-- [ ] Implementar `client.fetchChats` en Baileys para obtener lista real [ ]
-- [ ] UI de Lista de Contactos (Avatar + Nombre + Último Mensaje) [ ]
-- [ ] Lógica de selección de chat activo (Cargar historial del contacto) [ ]
-- [ ] **Sales Detector**: Regex para palabras clave ("precio", "costo", "cotización") -> Resaltado dorado en UI [ ]
-- [ ] Botón "Generar Cotización" -> Invoca comando de Copilot con prompt de ventas [ ]
+- [✓] Implementar `client.fetchChats` en Baileys para obtener lista real [✓]
+- [✓] UI de Lista de Contactos (Avatar + Nombre + Último Mensaje) [✓]
+- [✓] Lógica de selección de chat activo (Cargar historial del contacto) [✓]
+- [✓] **Sales Detector**: Regex para palabras clave ("precio", "costo", "cotización") -> Resaltado dorado en UI [✓]
+- [✓] Botón "Generar Cotización" -> Invoca comando de Copilot con prompt de ventas [✓]
 
 ### 🧪 Cómo Demostrar
 1. Ver lista de chats reales en el Sidebar.

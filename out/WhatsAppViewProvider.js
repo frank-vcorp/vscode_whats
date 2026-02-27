@@ -37,8 +37,8 @@ exports.WhatsAppViewProvider = void 0;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs"));
 /**
- * @intervention IMPL-20260227-06
- * @see context/checkpoints/CHK_20260227_SALES_AGENT.md
+ * @intervention IMPL-20260227-07
+ * @see context/checkpoints/CHK_20260227_STATUSBAR.md
  */
 class WhatsAppViewProvider {
     _extensionUri;
@@ -47,6 +47,9 @@ class WhatsAppViewProvider {
     _view;
     lastQrCode;
     isConnected = false;
+    // Evento de visibilidad
+    _onDidChangeVisibility = new vscode.EventEmitter();
+    onDidChangeVisibility = this._onDidChangeVisibility.event;
     // Estado de la UI
     currentView = 'list';
     activeChatJid;
@@ -120,6 +123,10 @@ class WhatsAppViewProvider {
     }
     resolveWebviewView(webviewView, context, _token) {
         this._view = webviewView;
+        // Notificar cambios de visibilidad
+        webviewView.onDidChangeVisibility(() => {
+            this._onDidChangeVisibility.fire(webviewView.visible);
+        });
         webviewView.webview.options = {
             enableScripts: true,
             localResourceRoots: [

@@ -3,8 +3,8 @@ import * as fs from 'fs';
 import { WhatsAppClient, ChatInfo } from './whatsapp-client.js';
 
 /**
- * @intervention IMPL-20260227-06
- * @see context/checkpoints/CHK_20260227_SALES_AGENT.md
+ * @intervention IMPL-20260227-07
+ * @see context/checkpoints/CHK_20260227_STATUSBAR.md
  */
 export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
 
@@ -13,6 +13,10 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
     private lastQrCode?: string;
     private isConnected: boolean = false;
     
+    // Evento de visibilidad
+    private _onDidChangeVisibility = new vscode.EventEmitter<boolean>();
+    public readonly onDidChangeVisibility = this._onDidChangeVisibility.event;
+
     // Estado de la UI
     private currentView: 'list' | 'chat' = 'list';
     private activeChatJid?: string;
@@ -101,6 +105,11 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
         _token: vscode.CancellationToken,
     ) {
         this._view = webviewView;
+
+        // Notificar cambios de visibilidad
+        webviewView.onDidChangeVisibility(() => {
+            this._onDidChangeVisibility.fire(webviewView.visible);
+        });
 
         webviewView.webview.options = {
             enableScripts: true,
