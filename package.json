@@ -2,7 +2,7 @@
   "name": "vscode-whats",
   "displayName": "WhatsApp Web for VS Code",
   "description": "Integra WhatsApp Web en tu sidebar de VS Code",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "frank-saavedra",
   "engines": {
     "vscode": "^1.85.0"
@@ -71,6 +71,7 @@
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
     "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^3.7.1",
     "eslint": "^8.56.0",
     "glob": "^10.3.10",
     "mocha": "^10.2.0",
@@ -83,8 +84,8 @@
   "dependencies": {
     "@vscode/codicons": "^0.0.44",
     "@vscode/webview-ui-toolkit": "^1.4.0",
-    "@whiskeysockets/baileys": "^6.7.21",
-    "pino": "^10.3.1",
+    "@whiskeysockets/baileys": "^6.6.0",
+    "pino": "^7.11.0",
     "qrcode": "^1.5.4"
   }
 }

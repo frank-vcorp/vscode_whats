@@ -31,3 +31,15 @@
 ## Próximos Pasos
 - Validar en entorno real con un dispositivo móvil.
 - Implementar manejo de mensajes multimedia (actualmente solo muestra texto o placeholder).
+
+## Vuelta a la Estabilidad (v0.5.2)
+**Fecha:** 2026-02-27
+**Versión:** 0.5.2
+
+Se ha confirmado que la versión `0.5.2` restaura la estabilidad en la conexión con WhatsApp Web:
+1.  **Conexión Estable**: El uso de `baileys` v6.7.x junto con la configuración de `browser` correcta evita las desconexiones frecuentes y los conflictos de sesión con otros clientes web.
+2.  **Carga de Chats**: La implementación manual del Store asegura que la lista de chats se popule correctamente al iniciar, solucionando el problema de la "lista vacía".
+3.  **Persistencia**: El archivo `baileys_store.json` permite mantener el estado entre recargas de ventana de VS Code, mejorando la experiencia de usuario.
+
+El soft-gate de **Testing** se considera superado con pruebas manuales exitosas de escaneo de QR, recepción de mensajes y persistencia básica.
+

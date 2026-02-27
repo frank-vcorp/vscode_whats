@@ -1,4 +1,4 @@
-# PROYECTO: WhatsApp for VS Code (v0.5.0 - Status Bar & Polish)
+# PROYECTO: WhatsApp for VS Code (v0.5.2 - Status Bar & Polish)
 **Estado:** [✓] Completado
 
 ## 📋 MICRO-SPRINT: Integración en Status Bar
@@ -57,7 +57,7 @@
 
 ### Fase 3: Inteligencia y Archivos
 - [✓] (13) Botón "Responder con Copilot" [✓]
-- [/] (8) Subida/Descarga de archivos nativa [/]
+- [✓] (8) Subida/Descarga de archivos nativa [✓]
 
 ## ⚠️ Deuda Técnica Crítica & Seguridad (MITIGADA)
 | ID | Descripción | Prioridad | Estado |
