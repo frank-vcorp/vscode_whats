@@ -418,15 +418,24 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
             </html>`;
     }
 
+    private _escapeHtml(unsafe: string): string {
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
     private _renderChatList(): string {
         const chatsHtml = this.chats.map(chat => `
             <div class="chat-item" onclick="selectChat('${chat.jid}')">
                 <div class="chat-header">
-                    <span>${chat.name || chat.jid}</span>
+                    <span>${this._escapeHtml(chat.name || chat.jid)}</span>
                     <span>${new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                 </div>
                 <div class="chat-preview">
-                    ${chat.lastMessage || '...'}
+                    ${this._escapeHtml(chat.lastMessage || '...')}
                 </div>
             </div>
         `).join('');
@@ -447,16 +456,16 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
         const messagesHtml = msgs.map(m => `
             <div class="message ${m.sender === 'Yo' ? 'sent' : 'received'} ${m.isSales ? 'sales-opportunity' : ''}">
                 <div class="message-header">
-                    <span class="sender">${m.sender}</span>
+                    <span class="sender">${this._escapeHtml(m.sender)}</span>
                     ${m.sender !== 'Yo' ? `
-                        <span class="copilot-action" onclick="askCopilot('${m.text.replace(/'/g, "\\'")}', ${m.isSales})" title="Pedir ayuda a Copilot">🤖</span>
+                        <span class="copilot-action" onclick="askCopilot('${this._escapeHtml(m.text).replace(/'/g, "\\'")}', ${m.isSales})" title="Pedir ayuda a Copilot">🤖</span>
                     ` : ''}
                     ${m.isSales ? '<span class="sales-icon" title="Oportunidad de Venta">💰</span>' : ''}
                 </div>
-                <div class="text">${m.text}</div>
+                <div class="text">${this._escapeHtml(m.text)}</div>
                 ${m.isSales ? `
                     <div class="sales-actions">
-                        <vscode-button appearance="secondary" style="font-size: 0.8em; padding: 2px 5px;" onclick="askCopilot('${m.text.replace(/'/g, "\\'")}', true)">
+                        <vscode-button appearance="secondary" style="font-size: 0.8em; padding: 2px 5px;" onclick="askCopilot('${this._escapeHtml(m.text).replace(/'/g, "\\'")}', true)">
                             Generar Cotización
                         </vscode-button>
                     </div>
@@ -468,7 +477,7 @@ export class WhatsAppViewProvider implements vscode.WebviewViewProvider {
             <div id="chat-container">
                 <div id="chat-header-bar">
                     <vscode-button id="back-btn" appearance="icon">⬅️</vscode-button>
-                    <h3>${this.activeChatJid}</h3>
+                    <h3>${this._escapeHtml(this.activeChatJid)}</h3>
                 </div>
                 <div id="messages-list">
                     ${messagesHtml}

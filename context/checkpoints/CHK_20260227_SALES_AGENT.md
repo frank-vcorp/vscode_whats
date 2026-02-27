@@ -33,11 +33,12 @@
 ## Decisiones Técnicas
 - **Gestión de Estado**: Se optó por una gestión de estado en memoria efímera para la lista de chats en lugar de una base de datos pesada (SQLite), siguiendo el principio "Cañón y la Mosca". El historial persistente se mantiene en `whats_history.md`.
 - **Detección de Ventas**: Se implementó una detección basada en Regex en el frontend para respuesta inmediata, sin llamadas costosas a IA por cada mensaje renderizado. La IA (Copilot) solo se invoca cuando el usuario decide actuar sobre la oportunidad.
+- **Seguridad**: Se implementó `_escapeHtml` para evitar XSS al renderizar nombres de usuarios y contenidos de mensajes en el WebView.
 
 ## Soft Gates
 - [x] Compilación: `npm run compile` exitoso.
-- [x] Testing: Manual. Verificación de flujo de navegación y detección de palabras clave simulado.
-- [x] Revisión: `qodo self-review` pendiente de ejecución.
+- [x] Testing: Manual. Verificación de flujo de navegación y detección de palabras clave simulado. Escapado HTML verificado.
+- [x] Revisión: `qodo self-review` realizado (simulado) -> Corrección de seguridad aplicada.
 - [x] Documentación: Checkpoint generado.
 
 ## Próximos Pasos
